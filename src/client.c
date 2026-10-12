@@ -128,7 +128,10 @@ static int run_phases(pull_state *p, server_stats *stats)
     if (p->listing)
         p->gen_next = p->fl.count;
     while (p->gen_next < p->fl.count || p->outstanding > 0) {
-        while (p->gen_next < p->fl.count && p->outstanding < PULL_WINDOW)
+        /* The generator waits while our output is backed up: the server
+         * is busy sending, and its data must be read first. */
+        while (p->gen_next < p->fl.count && p->outstanding < PULL_WINDOW
+               && p->s->conn.out_len <= CONN_OUT_HIGH)
             if ((rc = gen_entry(p, p->gen_next++)) != RERR_OK)
                 return rc;
         if (p->outstanding > 0) {
@@ -334,7 +337,9 @@ int client_pull(ars_session *s, const ars_options *o, const char *dest)
         p.fstate = calloc(p.fl.count, 1);
         p.redo = malloc(p.fl.count * sizeof *p.redo);
         p.buf = malloc(CHUNK_SIZE);
-        if (!p.fstate || !p.redo || !p.buf) {
+        p.block = malloc(MAX_BLOCK_SIZE);
+        p.basis_buf = malloc(BASIS_CACHE);
+        if (!p.fstate || !p.redo || !p.buf || !p.block || !p.basis_buf) {
             fprintf(stderr, "arsync: out of memory\n");
             rc = RERR_MALLOC;
             goto out;
@@ -372,6 +377,8 @@ out:
     free(p.fstate);
     free(p.redo);
     free(p.buf);
+    free(p.block);
+    free(p.basis_buf);
     flist_free(&p.fl);
     return rc;
 }

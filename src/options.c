@@ -86,6 +86,8 @@ static int parse_long(ars_options *o, const char *opt, int argc, char **argv, in
         o->times = 1;
     else if (strcmp(name, "dry-run") == 0)
         o->dry_run = 1;
+    else if (strcmp(name, "whole-file") == 0)
+        o->whole_file = 1;
     else if (strcmp(name, "archive") == 0)
         o->recursive = o->times = 1;
     else if (strcmp(name, "no-motd") == 0)
@@ -116,6 +118,9 @@ static int parse_short(ars_options *o, const char *opts, char *err, size_t errle
             break;
         case 'n':
             o->dry_run = 1;
+            break;
+        case 'W':
+            o->whole_file = 1;
             break;
         case 'a':
             /* rsync's -a is -rlptgoD; of those arsync supports -r and -t. */

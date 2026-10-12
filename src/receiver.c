@@ -12,6 +12,7 @@
 #include <time.h>
 
 #include "pull.h"
+#include "checksum.h"
 #include "digest.h"
 #include "plat.h"
 
@@ -19,6 +20,8 @@
  * names are kept within that everywhere for simplicity. */
 #define TMPNAME_MAX 30
 #define TMPNAME_SUFFIX 7   /* ".XXXXXX" */
+
+static void basis_close(pull_state *p);
 
 static int stream_failure(pull_state *p, const char *what)
 {
@@ -61,6 +64,7 @@ static int make_tmpname(pull_state *p, const char *local)
 
 void recv_cleanup(pull_state *p)
 {
+    basis_close(p);
     if (p->tmp[0]) {
         plat_remove(p->tmp);
         p->tmp[0] = '\0';
@@ -78,12 +82,51 @@ static void log_name(pull_state *p, size_t ndx)
     printf("%s%s\n", name, WIRE_ISDIR(f->mode) ? "/" : "");
 }
 
+static void basis_close(pull_state *p)
+{
+    if (p->basis) {
+        plat_close(p->basis);
+        p->basis = NULL;
+    }
+}
+
+/* Returns a pointer to len bytes of the old file at off, or NULL if they
+ * can't be read. Reads through a window, since a delta mostly refers to
+ * blocks in order. */
+static const uint8_t *basis_get(pull_state *p, int64_t off, size_t len)
+{
+    long r;
+
+    if (!p->basis || off < 0 || off + (int64_t)len > p->basis_size)
+        return NULL;
+    if (off < p->basis_off || off + (int64_t)len > p->basis_off + (int64_t)p->basis_len) {
+        if (plat_seek(p->basis, off) != PLAT_OK)
+            return NULL;
+        p->basis_off = off;
+        p->basis_len = 0;
+        while (p->basis_len < BASIS_CACHE) {
+            r = plat_read(p->basis, p->basis_buf + p->basis_len, BASIS_CACHE - p->basis_len);
+            if (r <= 0)
+                break;
+            p->basis_len += (size_t)r;
+        }
+        if ((int64_t)p->basis_len < (int64_t)len)
+            return NULL;
+    }
+    return p->basis_buf + (off - p->basis_off);
+}
+
 /* Reads the token stream into f (or nowhere, if f is NULL), feeding the
- * checksum. Returns RERR_OK, a fatal code, or -1 on a write error. */
-static int read_tokens(pull_state *p, plat_file *f, ars_digest *sum, int64_t *written)
+ * checksum: literal data comes from the server, matched blocks from the
+ * old file. Returns RERR_OK, a fatal code, or -1 on a write error. A block
+ * that can't be read from the old file is simply missing from the result,
+ * which then fails verification and is fetched again. */
+static int read_tokens(pull_state *p, const ars_sum_head *sh, plat_file *f,
+                       ars_digest *sum, int64_t *written)
 {
     ars_reader *in = &p->s->in;
-    int32_t n;
+    const uint8_t *block;
+    int32_t n, len;
     size_t chunk;
     int write_failed = 0;
 
@@ -95,10 +138,20 @@ static int read_tokens(pull_state *p, plat_file *f, ars_digest *sum, int64_t *wr
         if (n == 0)
             break;
         if (n < 0) {
-            /* We never send block checksums, so the server has no blocks
-             * of ours to refer to. */
-            fprintf(stderr, "arsync: protocol error: unexpected block reference\n");
-            return RERR_PROTOCOL;
+            n = -(n + 1);
+            if (n >= sh->count) {
+                fprintf(stderr, "arsync: protocol error: block reference %ld out of range\n", (long)n);
+                return RERR_PROTOCOL;
+            }
+            len = n == sh->count - 1 && sh->remainder ? sh->remainder : sh->blength;
+            block = basis_get(p, (int64_t)n * sh->blength, (size_t)len);
+            if (block) {
+                digest_update(sum, block, (size_t)len);
+                if (f && !write_failed && plat_write(f, block, (size_t)len) != PLAT_OK)
+                    write_failed = 1;
+            }
+            *written += len;
+            continue;
         }
         while (n > 0) {
             chunk = n > CHUNK_SIZE ? CHUNK_SIZE : (size_t)n;
@@ -115,16 +168,19 @@ static int read_tokens(pull_state *p, plat_file *f, ars_digest *sum, int64_t *wr
     return write_failed ? -1 : RERR_OK;
 }
 
-static int read_sum_head(pull_state *p)
+static int read_sum_head(pull_state *p, ars_sum_head *sh)
 {
     ars_reader *in = &p->s->in;
-    int32_t count = r_int32(in), blength = r_int32(in);
-    int32_t s2length = r_int32(in), remainder = r_int32(in);
 
+    sh->count = r_int32(in);
+    sh->blength = r_int32(in);
+    sh->s2length = r_int32(in);
+    sh->remainder = r_int32(in);
     if (in->err)
         return stream_failure(p, "reading checksum header");
-    if (count < 0 || blength < 0 || blength > MAX_BLOCK_SIZE || s2length < 0
-        || s2length > DIGEST_LEN || remainder < 0 || remainder > blength) {
+    if (sh->count < 0 || sh->blength < 0 || sh->blength > MAX_BLOCK_SIZE || sh->s2length < 0
+        || sh->s2length > DIGEST_LEN || sh->remainder < 0 || sh->remainder > sh->blength
+        || (sh->count > 0 && sh->blength == 0)) {
         fprintf(stderr, "arsync: protocol error: invalid checksum header\n");
         return RERR_PROTOCOL;
     }
@@ -138,13 +194,22 @@ static int receive_file(pull_state *p, size_t ndx)
     uint8_t want[DIGEST_LEN], got[DIGEST_LEN];
     plat_fileinfo st;
     plat_file *f = NULL;
+    ars_sum_head sh;
     ars_digest sum;
     int64_t written;
     int rc, existed;
 
     pull_local_path(p, ndx, local, sizeof local);
-    if ((rc = read_sum_head(p)) != RERR_OK)
+    if ((rc = read_sum_head(p, &sh)) != RERR_OK)
         return rc;
+
+    /* The checksums we sent describe the file now at the destination;
+     * that's the old file the server's block references point into. */
+    basis_close(p);
+    p->basis_len = 0;
+    if (sh.count > 0 && plat_stat(local, &st) == PLAT_OK
+        && plat_open_read(local, &p->basis) == PLAT_OK)
+        p->basis_size = st.size;
 
     if (make_tmpname(p, local) < 0)
         pull_file_error(p, "arsync: cannot make a temporary name for %s", local);
@@ -155,7 +220,8 @@ static int receive_file(pull_state *p, size_t ndx)
 
     /* Even without somewhere to write it, the data has to be read. */
     digest_init(&sum, p->s->checksum_type);
-    rc = read_tokens(p, f, &sum, &written);
+    rc = read_tokens(p, &sh, f, &sum, &written);
+    basis_close(p);
     if (rc > 0) {
         if (f)
             plat_close(f);

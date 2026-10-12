@@ -82,3 +82,12 @@ behave differently. Compare results with `rsync -rt` of the same module on Linux
 | 8 | Same as 1 into `Work:` (a real disk), then `list Work:t1 ALL` | No leftover temp files (names starting with `.` and ending in 6 digits) |
 | 9 | Start a large pull (e.g. point the daemon at a big directory) and press **Ctrl-C** mid-file | Stops promptly, `$RC` 20, no temp file left in the destination |
 | 10 | Protection bits: `protect RAM:t1/hello.txt +s` then `echo x >RAM:t1/hello.txt` and run 1 again | `hello.txt` updated and still has the `s` bit (existing protection bits are kept) |
+
+## M5 – delta transfers
+
+| # | Command | Expect |
+|---|---------|--------|
+| 1 | Copy once: `arsync -rt rsync://127.0.0.1:8730/test/ Work:t5`. Then on the Amiga change a few bytes in the middle of `Work:t5/sub/random.bin` (any hex editor, or `echo >>Work:t5/sub/random.bin x` to append) and `setdate Work:t5/sub/random.bin 01-Jan-01` | — |
+| 2 | `arsync -rtv rsync://127.0.0.1:8730/test/ Work:t5` | `sub/random.bin` re-sent; **`received` is a few KB, not ~100,000** (speedup well above 1). File is byte-identical to the Linux copy afterwards (compare sizes, or pull it back with `-c`-less rsync and `cmp`) |
+| 3 | Same as 2 with `-W` | `received` ≈ 100,000 (whole file) |
+| 4 | Timing: point the daemon at a directory with a few MB-sized files, copy once, then change one file slightly and time `arsync -rt` vs `arsync -rtW` | Report both times and your CPU. Delta costs CPU (MD5 of the old file); on a slow 68k with a fast network `-W` can be quicker |

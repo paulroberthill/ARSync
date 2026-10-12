@@ -178,6 +178,8 @@ int build_server_args(const ars_options *o, const ars_remote *rem,
         buf[pos++] = 'n';
     if (o->list_only && !o->recursive)
         buf[pos++] = 'd';        /* list a directory's contents, not just itself */
+    if (o->whole_file)
+        buf[pos++] = 'W';
     if (o->times)
         buf[pos++] = 't';
     if (o->recursive)

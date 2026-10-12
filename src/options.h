@@ -11,6 +11,7 @@ typedef struct ars_options {
     int recursive;
     int times;          /* -t: preserve modification times */
     int dry_run;
+    int whole_file;     /* -W: no delta transfer */
     int list_only;      /* 1 = implied (no destination), 2 = --list-only */
     int port;           /* --port, 0 = default */
     int timeout;        /* --timeout seconds, 0 = none */

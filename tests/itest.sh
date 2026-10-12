@@ -338,5 +338,47 @@ pull "non-empty dir in place of file" times \
 pull "3000 small files" times "" -rt "$URL/many/" @
 pull "3000 small files again" times "'$RSYNC' -rt '$URL/many/' dest >/dev/null 2>&1" -rtv "$URL/many/" @
 
+# --- delta transfers (M5) ----------------------------------------------------
+# Start from a complete copy, damage it in different ways (and backdate it so
+# the quick check can't skip it), then pull again.
+
+COPY="'$RSYNC' -rt '$XF/' dest >/dev/null 2>&1"
+OLD="touch -d 2001-01-01"
+pull "delta: bytes changed mid-file" times \
+    "$COPY; printf XXXXXXXX | dd of=dest/random-3m bs=1 seek=1500000 conv=notrunc 2>/dev/null; $OLD dest/random-3m" \
+    -rtv "$XF/" @
+pull "delta: local copy longer" times \
+    "$COPY; head -c 50000 /dev/urandom >> dest/random-3m; $OLD dest/random-3m" -rtv "$XF/" @
+pull "delta: local copy shorter" times \
+    "$COPY; truncate -s 2000000 dest/random-3m; $OLD dest/random-3m" -rtv "$XF/" @
+pull "delta: bytes inserted at the start" times \
+    "$COPY; { printf 'inserted'; cat dest/random-3m; } > dest/x && mv dest/x dest/random-3m; $OLD dest/random-3m" \
+    -rtv "$XF/" @
+pull "delta: completely different, same size" times \
+    "$COPY; head -c 3000000 /dev/urandom > dest/random-3m; $OLD dest/random-3m" -rtv "$XF/" @
+pull "delta: small files changed" times \
+    "$COPY; echo different > dest/a; echo x > dest/size999; $OLD dest/a dest/size999" -rtv "$XF/" @
+pull "whole file (-W) after change" times \
+    "$COPY; printf XXXXXXXX | dd of=dest/random-3m bs=1 seek=1500000 conv=notrunc 2>/dev/null; $OLD dest/random-3m" \
+    -rtvW "$XF/" @
+pull "delta: a few of 3000 files changed" times \
+    "'$RSYNC' -rt '$URL/many/' dest >/dev/null 2>&1; for f in d3/f7 d17/f50 d29/f99; do echo changed >> dest/\$f; $OLD dest/\$f; done" \
+    -rtv "$URL/many/" @
+
+# A small change to a 3 MB file must not resend the file.
+rm -rf "$WORK/eff"
+mkdir -p "$WORK/eff"
+"$RSYNC" -t "$XF/random-3m" "$WORK/eff/f" >/dev/null 2>&1
+printf XXXXXXXX | dd of="$WORK/eff/f" bs=1 seek=1500000 conv=notrunc 2>/dev/null
+touch -d 2001-01-01 "$WORK/eff/f"
+received=$("$ARSYNC" -tv "$XF/random-3m" "$WORK/eff/f" | sed -n 's/.*received \([0-9,]*\) bytes.*/\1/p' | tr -d ,)
+if [ -n "$received" ] && [ "$received" -lt 100000 ] && cmp -s "$X/random-3m" "$WORK/eff/f"; then
+    PASS=$((PASS + 1))
+    echo "ok   delta efficiency (received $received bytes for a 3 MB file)"
+else
+    FAIL=$((FAIL + 1))
+    echo "FAIL delta efficiency (received ${received:-?} bytes for a 3 MB file)"
+fi
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

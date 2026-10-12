@@ -21,11 +21,12 @@ AMIGA_CFLAGS = -std=gnu99 -O2 $(AMIGA_RT) $(WARN) -Wno-pointer-sign
 
 CORE_SRC = src/wire.c src/amitime.c src/plat_common.c src/url.c src/options.c \
            src/net.c src/session.c src/digest.c src/auth.c src/flist.c \
-           src/output.c src/client.c src/generator.c src/receiver.c
+           src/output.c src/client.c src/generator.c src/receiver.c \
+           src/checksum.c
 APP_SRC  = src/main.c
 TEST_SRC = tests/test_main.c tests/test_wire.c tests/test_amitime.c tests/test_plat.c \
            tests/test_session.c tests/test_auth.c tests/test_flist.c \
-           tests/test_pull.c
+           tests/test_pull.c tests/test_checksum.c
 
 HOST_DIR  = build/host
 AMIGA_DIR = build/amiga

@@ -126,7 +126,11 @@ static int conn_write(void *ctx, const uint8_t *src, size_t n)
     memcpy(c->out + c->out_len, src, n);
     c->out_len += n;
 
-    while (c->out_len > CONN_OUT_HIGH) {
+    /* Push data out while there's room to take in what the peer sends
+     * meanwhile. With the input buffer full, waiting here could deadlock
+     * (the peer may be blocked sending to us), so keep the rest buffered
+     * and let the caller read first. */
+    while (c->out_len > CONN_OUT_HIGH && in_room(c, 1) > 0) {
         if ((rc = pump(c, 0)) != WIRE_OK)
             return rc;
     }

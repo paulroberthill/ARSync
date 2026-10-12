@@ -333,6 +333,17 @@ M1–M3 can be tested on the Amiga early, since they need very little filesystem
 - **Flush before every wait:** the connection calls a hook that flushes the multiplexer
   before waiting for input. Without it, requests buffered in a not-yet-full frame were
   never sent and the pull hung (found in testing).
-- **Whole-file only so far:** requests carry an empty checksum header, so the server sends
-  every file as literal data. Delta transfer is M5.
+- **Delta transfer (M5):** for an existing local file the request carries its block
+  checksums, with block size and checksum length computed exactly as rsync does. Phase 1
+  uses short strong checksums and the redo phase full 16-byte ones. The receiver copies
+  referenced blocks from the old file through a 256 KiB read window. `-W` sends whole
+  files.
+- **Backpressure:** with large checksum sets and large replies in flight together, blocking
+  on a write while the input buffer is full could deadlock. So when input is full, writes
+  stay buffered in memory, and the generator only runs while our output isn't backed up.
+  Stress-tested with 30 × 4 MB files changing at once.
+- **Compiler bug:** GCC 6.5 for m68k miscompiles `while (v >>= 1)` on a 64-bit `v` at
+  `-O2`. The loop tests the Z flag of the low word's `roxr` only. `checksum.c` therefore
+  computes `ilog2` on 32-bit halves. Don't write 64-bit shift-then-test-for-zero loops in
+  this code base.
 

@@ -8,6 +8,7 @@
 #define PULL_H
 
 #include "flist.h"
+#include "plat.h"
 #include "session.h"
 
 /* Item flags exchanged with each request and reply (ITEM_*). */
@@ -61,7 +62,18 @@ typedef struct pull_state {
 
     char tmp[FLIST_MAXPATH];    /* temp file being written, "" if none */
     uint8_t *buf;               /* CHUNK_SIZE bytes for file data */
+    uint8_t *block;             /* MAX_BLOCK_SIZE bytes for the generator */
+
+    /* The receiver's view of the old file a delta refers to. */
+    plat_file *basis;
+    int64_t basis_size;
+    uint8_t *basis_buf;         /* BASIS_CACHE bytes */
+    int64_t basis_off;          /* file offset of basis_buf[0] */
+    size_t basis_len;           /* valid bytes in basis_buf */
 } pull_state;
+
+/* Old-file data is read in windows this big (at least two blocks). */
+#define BASIS_CACHE (2 * MAX_BLOCK_SIZE)
 
 /* Builds the local path for file-list entry ndx into buf. */
 void pull_local_path(const pull_state *p, size_t ndx, char *buf, size_t bufsize);
