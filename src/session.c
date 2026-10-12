@@ -86,6 +86,7 @@ int session_open(ars_session *s, const ars_remote *rem, const ars_options *o)
     int rc;
 
     memset(s, 0, sizeof *s);
+    s->started = time(NULL);
     s->remote_exit = -1;
     if (o->verbose > 1)
         printf("opening tcp connection to %s port %d\n", rem->host, port);
@@ -173,8 +174,14 @@ int build_server_args(const ars_options *o, const ars_remote *rem,
     buf[pos++] = '-';
     for (i = 0; i < o->verbose && i < 4; i++)
         buf[pos++] = 'v';
+    if (o->list_only && !o->recursive)
+        buf[pos++] = 'd';        /* list a directory's contents, not just itself */
+    if (o->recursive)
+        buf[pos++] = 'r';
     pos += (size_t)snprintf(buf + pos, bufsize - pos, "e.%s", ARS_CLIENT_INFO) + 1;
 
+    if (o->list_only > 1)
+        args[n++] = "--list-only";
     args[n++] = ".";
 
     /* A bare module name is sent as "module/", as rsync does. */
@@ -295,8 +302,10 @@ static int on_message(void *ctx, int tag, const uint8_t *payload, size_t len)
         fwrite(payload, 1, len, stdout);
         fflush(stdout);
         return WIRE_OK;
-    case MSG_ERROR:
     case MSG_ERROR_XFER:
+        s->saw_xfer_error = 1;
+        /* fall through */
+    case MSG_ERROR:
         s->saw_error = 1;
         /* fall through */
     case MSG_WARNING:

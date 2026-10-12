@@ -38,6 +38,10 @@ int plat_break_pending(void);
 /* Prompts on the console and reads a line without echoing it. */
 int plat_read_password(const char *prompt, char *buf, size_t bufsize);
 
+/* Converts Unix time to local calendar time. */
+struct ars_tm;
+void plat_localtime(int64_t t, struct ars_tm *tm);
+
 /* --- TCP sockets --- */
 
 /* Resolves host (name or dotted quad), connects, and leaves the socket in

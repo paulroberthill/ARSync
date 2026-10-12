@@ -5,6 +5,7 @@
 #include "arsync.h"
 #include "options.h"
 #include "plat.h"
+#include "client.h"
 #include "session.h"
 #include "url.h"
 
@@ -18,9 +19,12 @@ static void usage(FILE *out)
             "\n"
             "Usage: arsync [OPTIONS] rsync://[USER@]HOST[:PORT]/MODULE[/PATH] DEST\n"
             "       arsync [OPTIONS] [USER@]HOST::MODULE[/PATH] DEST\n"
+            "       arsync [OPTIONS] rsync://HOST/MODULE[/PATH]   (list files)\n"
             "       arsync rsync://HOST/   or   arsync HOST::   (list modules)\n"
             "\n"
             "  -v, --verbose        increase verbosity\n"
+            "  -r, --recursive      recurse into directories\n"
+            "      --list-only      list the files instead of copying them\n"
             "      --port=PORT      daemon port (default 873)\n"
             "      --timeout=SECS   I/O timeout\n"
             "      --no-motd        suppress the daemon's message of the day\n"
@@ -44,17 +48,8 @@ static int pull(const ars_remote *rem, const ars_options *opts)
         rc = session_request(&s, rem, opts, args, nargs);
     if (rc == RERR_OK)
         rc = session_setup_protocol(&s, opts);
-    if (rc == RERR_OK) {
-        /* The file list is next (milestone M3); wait for its first byte so
-         * the whole handshake is known to have worked. */
-        r_byte(&s.in);
-        if (s.in.err) {
-            rc = session_stream_failure(&s, "waiting for file list");
-        } else {
-            fprintf(stderr, "arsync: handshake complete; file list transfer is not implemented yet\n");
-            rc = RERR_UNSUPPORTED;
-        }
-    }
+    if (rc == RERR_OK)
+        rc = client_pull(&s, opts, opts->list_only ? NULL : opts->args[1]);
     session_close(&s);
     return rc;
 }
@@ -109,6 +104,9 @@ static int ars_main(int argc, char **argv)
         return rc;
     }
 
+    /* Without a destination, rsync lists the source. */
+    if (opts.nargs == 1 && !opts.list_only)
+        opts.list_only = 1;
     return pull(&rem, &opts);
 }
 

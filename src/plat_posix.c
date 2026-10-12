@@ -11,10 +11,12 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <termios.h>
+#include <time.h>
 #include <unistd.h>
 #include <netinet/in.h>
 
 #include "plat.h"
+#include "amitime.h"
 
 struct plat_file {
     int fd;
@@ -94,6 +96,23 @@ int plat_read_password(const char *prompt, char *buf, size_t bufsize)
     if (tty)
         fclose(tty);
     return rc;
+}
+
+void plat_localtime(int64_t t, ars_tm *tm)
+{
+    time_t tt = (time_t)t;
+    struct tm lt;
+
+    if (!localtime_r(&tt, &lt)) {
+        secs_to_civil(t, tm);
+        return;
+    }
+    tm->year = lt.tm_year + 1900;
+    tm->month = lt.tm_mon + 1;
+    tm->day = lt.tm_mday;
+    tm->hour = lt.tm_hour;
+    tm->minute = lt.tm_min;
+    tm->second = lt.tm_sec;
 }
 
 /* --- sockets --- */

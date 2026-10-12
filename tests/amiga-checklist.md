@@ -50,3 +50,17 @@ Until M3, a successful handshake ends with
 | 5 | `echo secret >RAM:pw` then `arsync --password-file=RAM:pw rsync://amiga@127.0.0.1:8730/private/ RAM:dest` | "handshake complete", no prompt |
 | 6 | `setenv RSYNC_PASSWORD secret` then the command from 2 | No prompt, "handshake complete" (then `unsetenv RSYNC_PASSWORD`) |
 | 7 | `arsync rsync://127.0.0.1:8730/test/nope RAM:dest` | The server's `link_stat "nope" … No such file or directory` message is shown |
+
+## M3 – listing files
+
+Compare with what `rsync` prints on the Linux machine for the same command (times appear
+in each side's local time zone).
+
+| # | Command | Expect |
+|---|---------|--------|
+| 1 | `arsync rsync://127.0.0.1:8730/test/` | `.`, `hello.txt`, `sub` with `drwxr-xr-x`-style modes, sizes like `4,096`, dates `YYYY/MM/DD HH:MM:SS`; `$RC` 0 |
+| 2 | `arsync -r rsync://127.0.0.1:8730/test/` | Also `sub/random.bin` with size `100,000` |
+| 3 | `arsync -v -r rsync://127.0.0.1:8730/test/` | `receiving file list ... done` first, then a `sent … received …` / `total size is …` summary |
+| 4 | `arsync rsync://127.0.0.1:8730/test/nope` | Server's `link_stat … No such file or directory`, then `arsync error: … (code 23)`, `$RC` 23 |
+| 5 | Same as 1 with the Amiga clock/time zone set to something other than GMT (Prefs/Locale) | Times shift by exactly that zone's offset compared with the Linux side in UTC (`TZ=UTC rsync …`). If they're off by **twice** the offset, the `loc_GMTOffset` sign assumption (DESIGN §10) is wrong |
+| 6 | A large module (e.g. point the daemon at `/usr/share`) with `-r`, output redirected to `RAM:list` | Completes; note the time and free memory (`avail`) before and after |

@@ -78,6 +78,10 @@ static int parse_long(ars_options *o, const char *opt, int argc, char **argv, in
     }
     if (strcmp(name, "verbose") == 0)
         o->verbose++;
+    else if (strcmp(name, "recursive") == 0)
+        o->recursive = 1;
+    else if (strcmp(name, "list-only") == 0)
+        o->list_only = 2;
     else if (strcmp(name, "no-motd") == 0)
         o->no_motd = 1;
     else if (strcmp(name, "help") == 0)
@@ -97,6 +101,9 @@ static int parse_short(ars_options *o, const char *opts, char *err, size_t errle
         switch (*opts) {
         case 'v':
             o->verbose++;
+            break;
+        case 'r':
+            o->recursive = 1;
             break;
         case 'h':
             o->show_help = 1;

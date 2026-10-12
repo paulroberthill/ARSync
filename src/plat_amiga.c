@@ -160,6 +160,11 @@ int plat_read_password(const char *prompt, char *buf, size_t bufsize)
     return rc;
 }
 
+void plat_localtime(int64_t t, ars_tm *tm)
+{
+    secs_to_civil(t - (int64_t)gmt_offset * 60, tm);
+}
+
 /* --- sockets --- */
 
 static int open_net(void)

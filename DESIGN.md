@@ -312,6 +312,9 @@ M1–M3 can be tested on the Amiga early, since they need very little filesystem
   rsync refuses files that others can read.
 - **No `-e.i`, `L` or `s`:** see §4. If a server still turns on incremental recursion,
   arsync stops with a protocol error.
+- **No incremental recursion:** with `-r`, rsync's own client prints `receiving incremental
+  file list`. arsync always gets the whole list first and prints `receiving file list ...
+  done`, and its `-v` byte counts match `rsync --no-inc-recursive`.
 - **Protocol 30/31 servers without varint file-list flags** (rsync 3.0.x–3.1.x) skip
   checksum negotiation and use md5. The file-list decoder (M3) must also handle their
   older flag encoding.

@@ -3,6 +3,8 @@
 #ifndef SESSION_H
 #define SESSION_H
 
+#include <time.h>
+
 #include "net.h"
 #include "options.h"
 #include "url.h"
@@ -37,6 +39,7 @@
 #define SESSION_MAX_ARGS 16
 
 typedef struct ars_session {
+    time_t started;             /* for the transfer rate */
     ars_conn conn;
     int connected;
     int remote_protocol;
@@ -60,6 +63,7 @@ typedef struct ars_session {
     int remote_io_error;
     int remote_exit;            /* from MSG_ERROR_EXIT, -1 if none */
     int saw_error;              /* server reported an error message */
+    int saw_xfer_error;         /* ...one about a file (makes the exit code 23) */
 } ars_session;
 
 /* Picks the protocol version both sides speak, mirroring rsync's rule: the
