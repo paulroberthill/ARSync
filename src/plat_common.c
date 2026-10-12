@@ -15,6 +15,7 @@ const char *plat_strerror(int err)
     case PLAT_EHOST: return "host name lookup failed";
     case PLAT_ECONN: return "connection failed";
     case PLAT_ETOOBIG: return "value too large for this system";
+    case PLAT_EACCES: return "permission denied";
     default: return "I/O error";
     }
 }

@@ -40,5 +40,6 @@ void test_flist_suite(void);
 void test_pull_suite(void);
 void test_checksum_suite(void);
 void test_fsmap_suite(void);
+void test_push_suite(void);
 
 #endif

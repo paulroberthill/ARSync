@@ -73,6 +73,11 @@ void flist_free(ars_flist *fl);
 int flist_recv(ars_flist *fl, ars_reader *r, const ars_flist_format *fmt,
                char *err, size_t errlen);
 
+/* Sends the list (in its current order, normally sorted) as a sender
+ * does, ending with io_error. protocol decides whether nanoseconds go. */
+void flist_send(const ars_flist *fl, ars_writer *w, const ars_flist_format *fmt,
+                int protocol, int io_error);
+
 static inline const char *flist_name(const ars_flist *fl, const ars_file *f)
 {
     return fl->names + f->name;

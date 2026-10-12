@@ -84,10 +84,12 @@ static void test_files(void)
     CHECK_EQ(plat_opendir(TDIR, &d), PLAT_OK);
     seen_c = 0;
     n = 0;
-    while ((i = plat_readdir(d, name, sizeof name)) == 1) {
+    while ((i = plat_readdir(d, name, sizeof name, &st)) == 1) {
         n++;
         if (strcmp(name, "c") == 0)
             seen_c = 1;
+        CHECK_EQ(st.type, PLAT_T_FILE);
+        CHECK_EQ(st.size, SIZE);
     }
     CHECK_EQ(i, 0);
     CHECK_EQ(n, 1);

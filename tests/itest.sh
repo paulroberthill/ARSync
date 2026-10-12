@@ -57,6 +57,10 @@ motd file = $WORK/motd
 [names]
     path = $WORK/names
 
+[upload]
+    path = $WORK/upload
+    read only = no
+
 [private]
     path = $WORK/pub
     comment = needs a password
@@ -107,6 +111,8 @@ mkdir -p "$X/deep/a/b/c/d"
 echo deep > "$X/deep/a/b/c/d/file"
 printf 'secret' > "$X/unreadable"
 chmod 000 "$X/unreadable"
+
+mkdir -p "$WORK/upload"
 
 # Names and sizes AmigaDOS can't hold (checked with --amiga-rules).
 N="$WORK/names"
@@ -434,6 +440,103 @@ irc=$?
 rm -f "$X/sparse-400m"
 check "SIGINT mid-file exits 20" [ "$irc" = 20 ]
 check "SIGINT leaves no temp file" [ -z "$(find "$WORK/int" -name '.*' -type f)" ]
+
+# --- pushing (M7) ------------------------------------------------------------
+# Each case pushes with rsync into upload/want and with arsync into
+# upload/got, then compares the trees on the server side, stdout and exit
+# codes. SETUP runs in the side's upload directory first; "@" in ARGS is
+# the destination URL.
+
+pushcase() {
+    name=$1
+    mode=$2
+    setup=$3
+    shift 3
+    for side in want got; do
+        D="$WORK/upload/$side"
+        chmod -R u+w "$D" 2>/dev/null
+        rm -rf "$D"
+        mkdir -p "$D"
+        [ -n "$setup" ] && (cd "$D" && eval "$setup")
+        args=
+        for a in "$@"; do
+            case $a in
+            @) a="$URL/upload/$side/dest" ;;
+            @/) a="$URL/upload/$side/dest/" ;;
+            esac
+            args="$args '$a'"
+        done
+        if [ $side = want ]; then
+            eval "\"$RSYNC\" --no-inc-recursive $args" > "$WORK/$side.out" 2> "$WORK/$side.err"
+        else
+            eval "\"$ARSYNC\" $args" > "$WORK/$side.out" 2> "$WORK/$side.err"
+        fi
+        echo $? > "$WORK/$side.rc"
+        sed -i -e 's/^sent [0-9,]* bytes  received [0-9,]* bytes  [0-9.,]* bytes\/sec$/sent N bytes  received N bytes/' \
+               -e 's/speedup is [0-9.,]*/speedup is N/' -e "s|\\b$side/dest|SIDE/dest|" "$WORK/$side.out"
+    done
+    ok=1
+    cmp -s "$WORK/want.rc" "$WORK/got.rc" || ok=0
+    cmp -s "$WORK/want.out" "$WORK/got.out" || ok=0
+    if [ -e "$WORK/upload/want/dest" ] || [ -e "$WORK/upload/got/dest" ]; then
+        tree_sig "$WORK/upload/want/dest" "$mode" > "$WORK/want.sig" 2>/dev/null
+        tree_sig "$WORK/upload/got/dest" "$mode" > "$WORK/got.sig" 2>/dev/null
+        cmp -s "$WORK/want.sig" "$WORK/got.sig" || ok=0
+        diff -r "$WORK/upload/want/dest" "$WORK/upload/got/dest" > /dev/null 2>&1 || ok=0
+    fi
+    if [ $ok = 1 ]; then
+        PASS=$((PASS + 1))
+        echo "ok   $name"
+    else
+        FAIL=$((FAIL + 1))
+        echo "FAIL $name (exit: rsync $(cat "$WORK/want.rc"), arsync $(cat "$WORK/got.rc"))"
+        diff "$WORK/want.out" "$WORK/got.out" | sed 's/^/     stdout: /'
+        diff "$WORK/want.sig" "$WORK/got.sig" 2>/dev/null | head -20 | sed 's/^/     tree: /'
+        sed 's/^/     rsync stderr: /' "$WORK/want.err" | head -5
+        sed 's/^/     arsync stderr: /' "$WORK/got.err" | head -10
+    fi
+}
+
+SEED="'$RSYNC' -rt '$X/' dest >/dev/null 2>&1"
+pushcase "push -rt into new dir" times "" -rt "$X/" @
+pushcase "push -rtv into new dir" times "" -rtv "$X/" @
+pushcase "push -rtv again (nothing changes)" times "$SEED" -rtv "$X/" @
+pushcase "push -rtv after server-side changes" times \
+    "$SEED; echo changed > dest/a; $OLD dest/a dest/z; rm dest/b/x; rm -rf dest/d1" -rtv "$X/" @
+pushcase "push delta: changed mid-file" times \
+    "$SEED; printf XXXXXXXX | dd of=dest/random-3m bs=1 seek=1500000 conv=notrunc 2>/dev/null; $OLD dest/random-3m" \
+    -rtv "$X/" @
+pushcase "push delta: server copy longer" times \
+    "$SEED; head -c 50000 /dev/urandom >> dest/random-3m; $OLD dest/random-3m" -rtv "$X/" @
+pushcase "push delta: server copy shorter" times \
+    "$SEED; truncate -s 2000000 dest/random-3m; $OLD dest/random-3m" -rtv "$X/" @
+pushcase "push delta: bytes inserted at the start" times \
+    "$SEED; { printf inserted; cat dest/random-3m; } > dest/x && mv dest/x dest/random-3m; $OLD dest/random-3m" \
+    -rtv "$X/" @
+pushcase "push -W after change" times \
+    "$SEED; printf XXXXXXXX | dd of=dest/random-3m bs=1 seek=1500000 conv=notrunc 2>/dev/null; $OLD dest/random-3m" \
+    -rtvW "$X/" @
+pushcase "push -r without -t" notimes "" -rv "$X/" @
+pushcase "push dir without trailing slash" times "" -rtv "$X/deep" @
+pushcase "push single file to new name" times "" -tv "$X/random-3m" @
+pushcase "push single file into existing dir" times "mkdir dest" -tv "$X/random-3m" @
+pushcase "push dry run -n" times "" -rtnv "$X/" @
+pushcase "push dry run -n after copy" times "$SEED; echo changed > dest/a; $OLD dest/a" -rtnv "$X/" @
+pushcase "push dir without -r" times "" -tv "$X/deep" @
+pushcase "push missing source" times "" -rt "$WORK/no-such-source" @
+pushcase "push 3000 small files" times "" -rt "$WORK/many/" @
+pushcase "push 3000 small files, a few changed" times \
+    "'$RSYNC' -rt '$WORK/many/' dest >/dev/null 2>&1; for f in d3/f7 d17/f50; do echo changed >> dest/\$f; $OLD dest/\$f; done" \
+    -rtv "$WORK/many/" @
+
+# Pushing a small change of a 3 MB file must not send the file.
+mkdir -p "$WORK/upload/eff"
+"$RSYNC" -t "$X/random-3m" "$URL/upload/eff/f" >/dev/null 2>&1
+printf XXXXXXXX | dd of="$WORK/upload/eff/f" bs=1 seek=1500000 conv=notrunc 2>/dev/null
+touch -d 2001-01-01 "$WORK/upload/eff/f"
+sent=$("$ARSYNC" -tv "$X/random-3m" "$URL/upload/eff/f" | sed -n 's/^sent \([0-9,]*\) bytes.*/\1/p' | tr -d ,)
+check "push delta efficiency (sent ${sent:-?} bytes for a 3 MB file)" \
+    [ -n "$sent" ] && [ "$sent" -lt 100000 ] && cmp -s "$X/random-3m" "$WORK/upload/eff/f"
 
 # A small change to a 3 MB file must not resend the file.
 rm -rf "$WORK/eff"

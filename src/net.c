@@ -61,8 +61,10 @@ static int pump(ars_conn *c, int need_input)
 
     if (rd && want_read) {
         n = plat_sock_recv(c->sock, c->in + c->in_len, room < RECV_CHUNK ? room : RECV_CHUNK);
-        if (n > 0)
+        if (n > 0) {
             c->in_len += (size_t)n;
+            c->bytes_in += n;
+        }
         else if (n == 0)
             c->eof = 1;
         else if (n != PLAT_EAGAIN)
@@ -73,6 +75,7 @@ static int pump(ars_conn *c, int need_input)
         if (n > 0) {
             memmove(c->out, c->out + n, c->out_len - (size_t)n);
             c->out_len -= (size_t)n;
+            c->bytes_out += n;
         } else if (n != PLAT_EAGAIN) {
             return fail(c, (int)n);
         }
@@ -130,7 +133,7 @@ static int conn_write(void *ctx, const uint8_t *src, size_t n)
      * meanwhile. With the input buffer full, waiting here could deadlock
      * (the peer may be blocked sending to us), so keep the rest buffered
      * and let the caller read first. */
-    while (c->out_len > CONN_OUT_HIGH && in_room(c, 1) > 0) {
+    while (c->out_len > CONN_OUT_HIGH && (c->block_writes || in_room(c, 1) > 0)) {
         if ((rc = pump(c, 0)) != WIRE_OK)
             return rc;
     }

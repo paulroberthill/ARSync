@@ -6,17 +6,18 @@ Version:      @VERSION@
 Architecture: m68k-amigaos >= 3.1
 Requires:     68020+, bsdsocket.library (Roadshow, AmiTCP, Miami)
 
-arsync fetches files from rsync daemons (rsync 3.0 or newer) using rsync's
-own protocol, version 32, including delta transfer: a big file with small
-changes is updated by sending only the changes.
+arsync copies files from and to rsync daemons (rsync 3.0 or newer) using
+rsync's own protocol, version 32, including delta transfer: a big file with
+small changes is updated by sending only the changes, in either direction.
 
   arsync rsync://host/                      list modules
   arsync rsync://host/module/dir            list files
   arsync -rtv rsync://host/module/dir Work:Dir
   arsync -t host::module/file RAM:file
+  arsync -rtv Work:Projects/ rsync://host/module/backup
 
 Features
-  - recursive pulls (-r), modification times (-t), dry run (-n),
+  - pull and push, recursive (-r), modification times (-t), dry run (-n),
     progress (-P), verbose output and transfer summary (-v)
   - delta transfer (MD5 block checksums), or whole files with -W
   - password-protected modules (--password-file, RSYNC_PASSWORD, or prompt)
@@ -28,8 +29,8 @@ Features
   - Ctrl-C works at any point and leaves no half-written files
   - runs on its own 64 KB stack, so the Shell stack size doesn't matter
 
-Not (yet) supported: pushing to a server, --delete, excludes, -z
-compression, symlinks, permissions, ssh.
+Not (yet) supported: --delete, excludes, -z compression, symlinks,
+permissions, ssh.
 
 Installation: copy arsync to C: (or anywhere in your path).
 

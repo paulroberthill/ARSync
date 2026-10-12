@@ -6,6 +6,7 @@
 #include "options.h"
 #include "plat.h"
 #include "client.h"
+#include "push.h"
 #include "session.h"
 #include "url.h"
 
@@ -19,6 +20,8 @@ static void usage(FILE *out)
             "\n"
             "Usage: arsync [OPTIONS] rsync://[USER@]HOST[:PORT]/MODULE[/PATH] DEST\n"
             "       arsync [OPTIONS] [USER@]HOST::MODULE[/PATH] DEST\n"
+            "       arsync [OPTIONS] SRC rsync://[USER@]HOST[:PORT]/MODULE[/PATH]   (push)\n"
+            "       arsync [OPTIONS] SRC [USER@]HOST::MODULE[/PATH]   (push)\n"
             "       arsync [OPTIONS] rsync://HOST/MODULE[/PATH]   (list files)\n"
             "       arsync rsync://HOST/   or   arsync HOST::   (list modules)\n"
             "\n"
@@ -42,22 +45,27 @@ static void usage(FILE *out)
             ARS_PROTOCOL_VERSION);
 }
 
-/* Fetches rem from the daemon. */
-static int pull(const ars_remote *rem, const ars_options *opts)
+/* Runs a transfer with the daemon at rem: fetching rem's path, or (push)
+ * sending local path src to it. */
+static int transfer(const ars_remote *rem, const ars_options *opts, int push, const char *src)
 {
     const char *args[SESSION_MAX_ARGS];
     char argbuf[512];
     ars_session s;
     int nargs, rc;
 
-    nargs = build_server_args(opts, rem, args, argbuf, sizeof argbuf);
+    nargs = build_server_args(opts, rem, push, args, argbuf, sizeof argbuf);
     rc = session_open(&s, rem, opts);
     if (rc == RERR_OK)
         rc = session_request(&s, rem, opts, args, nargs);
     if (rc == RERR_OK)
-        rc = session_setup_protocol(&s, opts);
-    if (rc == RERR_OK)
-        rc = client_pull(&s, opts, opts->list_only ? NULL : opts->args[1]);
+        rc = session_setup_protocol(&s, opts, push);
+    if (rc == RERR_OK) {
+        if (push)
+            rc = client_push(&s, opts, src);
+        else
+            rc = client_pull(&s, opts, opts->list_only ? NULL : opts->args[1]);
+    }
     session_close(&s);
     return rc;
 }
@@ -66,7 +74,7 @@ static int ars_main(int argc, char **argv)
 {
     char err[256];
     ars_options opts;
-    ars_remote rem;
+    ars_remote rem, dummy;
     ars_session s;
     int rc;
 
@@ -97,8 +105,28 @@ static int ars_main(int argc, char **argv)
         return RERR_SYNTAX;
     }
     if (rc == 0) {
-        fprintf(stderr, "arsync: %s is not an rsync daemon location"
-                " (use rsync://HOST/MODULE or HOST::MODULE)\n", opts.args[0]);
+        /* A local source: this is a push, to a daemon location. */
+        if (opts.nargs == 2) {
+            rc = parse_remote(opts.args[1], &rem, err, sizeof err);
+            if (rc < 0) {
+                fprintf(stderr, "arsync: %s\n", err);
+                return RERR_SYNTAX;
+            }
+            if (rc == 1) {
+                if (opts.list_only) {
+                    fprintf(stderr, "arsync: --list-only only lists remote files\n");
+                    return RERR_SYNTAX;
+                }
+                return transfer(&rem, &opts, 1, opts.args[0]);
+            }
+        }
+        fprintf(stderr, "arsync: one of %s must be an rsync daemon location"
+                " (rsync://HOST/MODULE or HOST::MODULE); arsync doesn't copy locally\n",
+                opts.nargs == 2 ? "the arguments" : opts.args[0]);
+        return RERR_SYNTAX;
+    }
+    if (opts.nargs == 2 && parse_remote(opts.args[1], &dummy, err, sizeof err) == 1) {
+        fprintf(stderr, "arsync: copying between two daemons isn't supported\n");
         return RERR_SYNTAX;
     }
     if (rem.path[0] == '\0') {
@@ -115,7 +143,7 @@ static int ars_main(int argc, char **argv)
     /* Without a destination, rsync lists the source. */
     if (opts.nargs == 1 && !opts.list_only)
         opts.list_only = 1;
-    return pull(&rem, &opts);
+    return transfer(&rem, &opts, 0, NULL);
 }
 
 int main(int argc, char **argv)

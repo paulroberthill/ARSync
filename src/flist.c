@@ -350,3 +350,82 @@ int flist_recv(ars_flist *fl, ars_reader *r, const ars_flist_format *fmt,
     flist_sort_and_clean(fl);
     return WIRE_OK;
 }
+
+/* ------------------------------------------------------------------ */
+/* Sending                                                             */
+
+void flist_send(const ars_flist *fl, ars_writer *w, const ars_flist_format *fmt,
+                int protocol, int io_error)
+{
+    const char *last = "", *name;
+    uint32_t prev_mode = 0, xflags;
+    int64_t prev_mtime = 0;
+    size_t i, l1, l2;
+
+    for (i = 0; i < fl->count; i++) {
+        const ars_file *f = &fl->files[i];
+
+        if (!f->mode)
+            continue;
+        name = flist_name(fl, f);
+
+        /* Owners and groups aren't sent, which rsync marks as "same". */
+        xflags = (f->xflags & XMIT_TOP_DIR) | XMIT_SAME_UID | XMIT_SAME_GID;
+        if (f->mode == prev_mode)
+            xflags |= XMIT_SAME_MODE;
+        prev_mode = f->mode;
+        if (i > 0 && f->mtime == prev_mtime)
+            xflags |= XMIT_SAME_TIME;
+        prev_mtime = f->mtime;
+        if (f->mtime_nsec && protocol >= 31)
+            xflags |= XMIT_MOD_NSEC;
+
+        for (l1 = 0; last[l1] && name[l1] == last[l1] && l1 < 255; l1++)
+            ;
+        l2 = strlen(name + l1);
+        if (l1 > 0)
+            xflags |= XMIT_SAME_NAME;
+        if (l2 > 255)
+            xflags |= XMIT_LONG_NAME;
+
+        if (fmt->varint_flags) {
+            w_varint(w, (int32_t)xflags);
+        } else {
+            /* Older encoding: one byte, or two with XMIT_EXTENDED_FLAGS.
+             * (The uid/gid bits keep the value from ever being 0, which
+             * would end the list.) */
+            if (xflags & 0xFF00) {
+                xflags |= XMIT_EXTENDED_FLAGS;
+                w_uint16(w, (uint16_t)xflags);
+            } else {
+                w_byte(w, (uint8_t)xflags);
+            }
+        }
+        if (xflags & XMIT_SAME_NAME)
+            w_byte(w, (uint8_t)l1);
+        if (xflags & XMIT_LONG_NAME)
+            w_varint(w, (int32_t)l2);
+        else
+            w_byte(w, (uint8_t)l2);
+        w_bytes(w, name + l1, l2);
+
+        w_varlong(w, f->size, 3);
+        if (!(xflags & XMIT_SAME_TIME))
+            w_varlong(w, f->mtime, 4);
+        if (xflags & XMIT_MOD_NSEC)
+            w_varint(w, (int32_t)f->mtime_nsec);
+        if (!(xflags & XMIT_SAME_MODE))
+            w_int32(w, (int32_t)f->mode);
+        last = name;
+    }
+
+    if (fmt->varint_flags) {
+        w_varint(w, 0);
+        w_varint(w, io_error);
+    } else if (io_error && fmt->safe_flist) {
+        w_uint16(w, XMIT_EXTENDED_FLAGS | XMIT_IO_ERROR_ENDLIST);
+        w_varint(w, io_error);
+    } else {
+        w_byte(w, 0);
+    }
+}

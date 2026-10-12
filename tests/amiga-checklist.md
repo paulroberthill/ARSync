@@ -108,3 +108,19 @@ file with a 40-character name, `Readme` and `README`, and (if you have space) a 
 | 6 | Ctrl-C during a large download | Stops promptly, `$RC` 20, no `.name.NNNNNN` temp file left |
 | 7 | A file dated before 1978 on the server: copy with `-t`, then run again | The second run doesn't re-send it (its date shows as 1-Jan-78) |
 | 8 | `version arsync` and `arsync --version` | `arsync 0.1.0` |
+
+## M7 – pushing (release 0.2.0)
+
+`tools/test-daemon.sh` now has a writable `upload` module; uploads land in the directory it
+prints.
+
+| # | Command | Expect |
+|---|---------|--------|
+| 1 | `arsync -rtv Work:SomeDir/ rsync://127.0.0.1:8730/upload/t1/` | `building file list ... done`, `created directory t1`, names, summary; `$RC` 0. On Linux, `diff -r` against the Amiga files (copy them over) shows no differences; times match (`ls -l --time-style=full-iso`) |
+| 2 | Same again | Nothing listed except the summary |
+| 3 | On Linux change a few bytes of a large file in the upload copy and backdate it (`touch -d 2001-01-01`); run 1 again | That file re-sent with **`sent` a few KB** (delta) |
+| 4 | `arsync -t Work:somefile rsync://127.0.0.1:8730/upload/` | File arrives under its own name |
+| 5 | `arsync -rtv Work: rsync://127.0.0.1:8730/upload/vol/` (a small volume or assign) | The whole volume's contents arrive under `vol/` |
+| 6 | A directory containing a soft link (`makelink … soft`) | The link is reported as `skipping non-regular file` (by the server); everything else copied |
+| 7 | Push a large tree and press **Ctrl-C** while files are being sent | Stops promptly, `$RC` 20 |
+| 8 | Timing: push a large file that changed a little (like M5 #4), with and without `-W` | Report both times; this is the first test of the matcher's speed on a 68k |

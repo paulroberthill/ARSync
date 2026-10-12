@@ -5,7 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define ARSYNC_VERSION "0.1.0"
+#define ARSYNC_VERSION "0.2.0"
 
 #define ARS_PROTOCOL_VERSION 32
 #define ARS_MIN_PROTOCOL 30

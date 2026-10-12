@@ -19,6 +19,7 @@ static int run_tests(int argc, char **argv)
     test_pull_suite();
     test_checksum_suite();
     test_fsmap_suite();
+    test_push_suite();
 
     printf("%d checks, %d failed\n", test_checks, test_failures);
     return test_failures ? 1 : 0;

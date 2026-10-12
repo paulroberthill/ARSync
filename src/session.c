@@ -159,7 +159,7 @@ int session_list_modules(ars_session *s, const ars_options *o)
 
 /* --- module request and authentication --- */
 
-int build_server_args(const ars_options *o, const ars_remote *rem,
+int build_server_args(const ars_options *o, const ars_remote *rem, int push,
                       const char **args, char *buf, size_t bufsize)
 {
     char module[256];
@@ -167,7 +167,8 @@ int build_server_args(const ars_options *o, const ars_remote *rem,
     int n = 0, i;
 
     args[n++] = "--server";
-    args[n++] = "--sender";
+    if (!push)
+        args[n++] = "--sender";
 
     /* One bundle of single-letter options, ending in our capabilities. */
     args[n++] = buf + pos;
@@ -338,6 +339,8 @@ static int on_message(void *ctx, int tag, const uint8_t *payload, size_t len)
     case MSG_LOG:
     case MSG_NOOP:
     case MSG_IO_TIMEOUT:
+    case MSG_SUCCESS:       /* only meaningful with options we don't use */
+    case MSG_DELETED:
         return WIRE_OK;
     default:
         return WIRE_EPROTO;
@@ -358,7 +361,7 @@ static int session_flush(ars_session *s)
     return conn_flush(&s->conn);
 }
 
-int session_setup_protocol(ars_session *s, const ars_options *o)
+int session_setup_protocol(ars_session *s, const ars_options *o, int push)
 {
     char theirs[256];
     ars_reader *r = &s->conn.r;
@@ -409,10 +412,14 @@ int session_setup_protocol(ars_session *s, const ars_options *o)
     s->conn.before_wait = flush_mux_hook;
     s->conn.before_wait_ctx = &s->mux;
 
-    /* Our (empty) filter list goes first. */
-    w_int32(&s->out, 0);
-    if (session_flush(s) != WIRE_OK)
-        return session_stream_failure(s, "failed to send filter list");
+    /* A receiving client sends its filter list first (ours is empty); a
+     * sending client sends none, as the server's receiver doesn't want one
+     * unless deleting. */
+    if (!push) {
+        w_int32(&s->out, 0);
+        if (session_flush(s) != WIRE_OK)
+            return session_stream_failure(s, "failed to send filter list");
+    }
     return RERR_OK;
 }
 

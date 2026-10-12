@@ -19,7 +19,7 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT TERM
 
-mkdir -p "$WORK/test/sub"
+mkdir -p "$WORK/test/sub" "$WORK/upload"
 
 cp /mnt/hd/LightwaveRTG.lha "$WORK/test"
 ls -asl "$WORK/test"
@@ -38,6 +38,11 @@ motd file = $WORK/motd
     comment = arsync test module
     read only = yes
 
+[upload]
+    path = $WORK/upload
+    comment = writable, for push tests
+    read only = no
+
 [private]
     path = $WORK/test
     comment = needs a password
@@ -47,7 +52,8 @@ motd file = $WORK/motd
 EOF
 echo "amiga:secret" > "$WORK/secrets"
 
-echo "rsync daemon on $ADDR:$PORT (modules: test, private [user amiga, password secret])"
+echo "rsync daemon on $ADDR:$PORT (modules: test, upload [writable], private [user amiga, password secret])"
+echo "uploads land in $WORK/upload (removed when the daemon stops)"
 echo "Ctrl-C to stop."
 # stdin must not be a socket, or the daemon assumes inetd mode.
 rsync --daemon --no-detach --log-file=/dev/stdout \

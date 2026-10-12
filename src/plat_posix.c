@@ -24,6 +24,7 @@ struct plat_file {
 
 struct plat_dir {
     DIR *dir;
+    char path[4096];
 };
 
 static volatile sig_atomic_t got_break;
@@ -46,6 +47,10 @@ static int map_errno(int e)
         return PLAT_EEXIST;
     case ENOMEM:
         return PLAT_ENOMEM;
+    case EACCES:
+    case EPERM:
+    case EROFS:
+        return PLAT_EACCES;
     case EFBIG:
     case EOVERFLOW:
         return PLAT_ETOOBIG;
@@ -309,16 +314,23 @@ int plat_close(plat_file *f)
     return rc;
 }
 
+static void fill_info(const struct stat *sb, plat_fileinfo *st)
+{
+    st->type = S_ISREG(sb->st_mode) ? PLAT_T_FILE : S_ISDIR(sb->st_mode) ? PLAT_T_DIR
+             : S_ISLNK(sb->st_mode) ? PLAT_T_LINK : PLAT_T_OTHER;
+    st->size = (int64_t)sb->st_size;
+    st->mtime = (int64_t)sb->st_mtim.tv_sec;
+    st->mtime_nsec = sb->st_mtim.tv_nsec;
+    st->perms = (uint32_t)(sb->st_mode & 07777);
+}
+
 int plat_stat(const char *path, plat_fileinfo *st)
 {
     struct stat sb;
 
     if (stat(path, &sb) < 0)
         return map_errno(errno);
-    st->type = S_ISREG(sb.st_mode) ? PLAT_T_FILE : S_ISDIR(sb.st_mode) ? PLAT_T_DIR : PLAT_T_OTHER;
-    st->size = (int64_t)sb.st_size;
-    st->mtime = (int64_t)sb.st_mtim.tv_sec;
-    st->mtime_nsec = sb.st_mtim.tv_nsec;
+    fill_info(&sb, st);
     return PLAT_OK;
 }
 
@@ -372,13 +384,16 @@ int plat_opendir(const char *path, plat_dir **out)
         return PLAT_ENOMEM;
     }
     d->dir = dir;
+    snprintf(d->path, sizeof d->path, "%s", path);
     *out = d;
     return PLAT_OK;
 }
 
-int plat_readdir(plat_dir *d, char *name, size_t namesize)
+int plat_readdir(plat_dir *d, char *name, size_t namesize, plat_fileinfo *info)
 {
     struct dirent *de;
+    struct stat sb;
+    char full[4096 + 256];
 
     for (;;) {
         errno = 0;
@@ -390,6 +405,12 @@ int plat_readdir(plat_dir *d, char *name, size_t namesize)
     if (strlen(de->d_name) >= namesize)
         return PLAT_ETOOBIG;
     strcpy(name, de->d_name);
+    if (info) {
+        snprintf(full, sizeof full, "%s/%s", d->path, de->d_name);
+        if (lstat(full, &sb) < 0)
+            return map_errno(errno);
+        fill_info(&sb, info);
+    }
     return 1;
 }
 

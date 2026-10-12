@@ -24,6 +24,10 @@ typedef struct ars_conn {
     size_t out_len, out_cap;
     int eof;
     int plat_err;       /* PLAT_E* behind the last failure, for reporting */
+    int block_writes;   /* writes may wait with the input buffer full: safe
+                         * when the peer reads and writes independently
+                         * (an rsync receiver), not when it alternates */
+    int64_t bytes_in, bytes_out;
     /* Called before waiting for input, so that output buffered in layers
      * above (the multiplexer) is sent first. Optional. */
     int (*before_wait)(void *ctx);

@@ -347,6 +347,11 @@ static int map_ioerr(LONG err)
         return PLAT_ENOMEM;
     case ERROR_BREAK:
         return PLAT_EBREAK;
+    case ERROR_DELETE_PROTECTED:
+    case ERROR_WRITE_PROTECTED:
+    case ERROR_READ_PROTECTED:
+    case ERROR_DISK_WRITE_PROTECTED:
+        return PLAT_EACCES;
     default:
         return PLAT_EIO;
     }
@@ -414,7 +419,13 @@ static void fill_stat(const struct FileInfoBlock *fib, plat_fileinfo *st)
 {
     ars_amidate d;
 
-    st->type = fib->fib_DirEntryType > 0 ? PLAT_T_DIR : PLAT_T_FILE;
+    /* Soft links show up (from ExNext) as ST_SOFTLINK; everything else
+     * positive is a directory (including hard links to one). */
+    if (fib->fib_DirEntryType == ST_SOFTLINK)
+        st->type = PLAT_T_LINK;
+    else
+        st->type = fib->fib_DirEntryType > 0 ? PLAT_T_DIR : PLAT_T_FILE;
+    st->perms = st->type == PLAT_T_DIR ? 0755 : 0644;
     st->size = (int64_t)(ULONG)fib->fib_Size;
     d.days = fib->fib_Date.ds_Days;
     d.minute = fib->fib_Date.ds_Minute;
@@ -532,13 +543,15 @@ fail:
     return rc;
 }
 
-int plat_readdir(plat_dir *d, char *name, size_t namesize)
+int plat_readdir(plat_dir *d, char *name, size_t namesize, plat_fileinfo *info)
 {
     if (!ExNext(d->lock, d->fib))
         return IoErr() == ERROR_NO_MORE_ENTRIES ? 0 : map_ioerr(IoErr());
     if (strlen((char *)d->fib->fib_FileName) >= namesize)
         return PLAT_ETOOBIG;
     strcpy(name, (char *)d->fib->fib_FileName);
+    if (info)
+        fill_stat(d->fib, info);
     return 1;
 }
 

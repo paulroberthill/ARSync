@@ -1,8 +1,8 @@
 # ARSync
 
-`arsync` is an rsync client for AmigaOS 3.x. It pulls files from any rsync daemon
+`arsync` is an rsync client for AmigaOS 3.x. It copies files from and to any rsync daemon
 (rsync 3.0 or later; protocol 30–32) over TCP, using rsync's delta transfer, so updating
-a large file with small changes only sends the changes.
+a large file with small changes only sends the changes, in either direction.
 
 It's a clean-room implementation written for the Amiga: one process (no `fork()`),
 `bsdsocket.library` and `dos.library` called directly, and Ctrl-C honoured throughout.
@@ -23,11 +23,17 @@ arsync rsync://HOST/                         list the daemon's modules
 arsync rsync://HOST/MODULE/PATH              list files
 arsync -rtv rsync://HOST/MODULE/PATH Work:Dest   fetch a directory tree
 arsync -t HOST::MODULE/file Work:file         fetch one file
+arsync -rtv Work:Projects/ rsync://HOST/MODULE/backup   send a directory's contents
+arsync -t Work:file HOST::MODULE/              send one file
 ```
+
+Sending needs a module the daemon lets you write to (`read only = no` in
+`rsyncd.conf`).
 
 Locations can be `rsync://[USER@]HOST[:PORT]/MODULE[/PATH]` or `[USER@]HOST::MODULE[/PATH]`.
 A path with a single colon (`Work:Dest`) is always local. As with rsync, a trailing `/` on
-the source means "the contents of this directory".
+the source means "the contents of this directory"; a volume or assign name (`Work:`) means
+its contents too.
 
 | Option | Meaning |
 |---|---|
@@ -64,11 +70,14 @@ renamed or truncated, since a renamed file would look new on every run:
 Modification times are converted to local time using the Locale preferences' time zone.
 Times before 1978 (the AmigaDOS epoch) are stored as 1 Jan 1978.
 
+When sending, files get permissions 0644 and directories 0755 on the server (subject to
+its umask); AmigaDOS protection bits aren't translated. Soft links are listed but, as with
+rsync without `-l`, not copied.
+
 ## Not supported
 
-Pushing files to a server, `--delete`, include/exclude rules, compression (`-z`),
-symlinks, permissions/owners, ssh transport. Pushing, `--delete`, excludes and `-z` are
-planned.
+`--delete`, include/exclude rules, compression (`-z`), symlinks, permissions/owners, ssh
+transport. `--delete`, excludes and `-z` are planned.
 
 ## Building
 

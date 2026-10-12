@@ -337,7 +337,7 @@ void test_pull_suite(void)
         int entries = 0;
 
         if (plat_opendir(DEST, &d) == PLAT_OK) {
-            while (plat_readdir(d, name, sizeof name) == 1)
+            while (plat_readdir(d, name, sizeof name, NULL) == 1)
                 entries++;
             plat_closedir(d);
         }

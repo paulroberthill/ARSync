@@ -23,6 +23,7 @@
 #define PLAT_EHOST (-9)      /* host name lookup failed */
 #define PLAT_ECONN (-10)     /* connection refused or unreachable */
 #define PLAT_ETOOBIG (-11)   /* offset or size beyond what the OS supports */
+#define PLAT_EACCES (-12)    /* permission denied / protected */
 
 const char *plat_strerror(int err);
 
@@ -86,13 +87,16 @@ int plat_close(plat_file *f);
 
 #define PLAT_T_FILE 1
 #define PLAT_T_DIR 2
-#define PLAT_T_OTHER 3
+#define PLAT_T_OTHER 3     /* device, FIFO, ... */
+#define PLAT_T_LINK 4      /* symlink (AmigaDOS soft link); only from plat_readdir */
 
 typedef struct plat_fileinfo {
     int type;
     int64_t size;
     int64_t mtime;     /* Unix seconds, UTC */
     long mtime_nsec;
+    uint32_t perms;    /* Unix permission bits to send (07777); AmigaOS
+                        * reports 0755 for directories, 0644 for files */
 } plat_fileinfo;
 
 int plat_stat(const char *path, plat_fileinfo *st);
@@ -111,8 +115,11 @@ typedef struct plat_dir plat_dir;
 
 int plat_opendir(const char *path, plat_dir **out);
 /* Returns 1 with the next name, 0 at the end, or a PLAT_E* code.
- * Never returns "." or "..". */
-int plat_readdir(plat_dir *d, char *name, size_t namesize);
+ * Never returns "." or "..". If info isn't NULL it's filled in without
+ * following links: symlinks (AmigaDOS soft links) come back as
+ * PLAT_T_LINK, anything else that's neither a file nor a directory as
+ * PLAT_T_OTHER. */
+int plat_readdir(plat_dir *d, char *name, size_t namesize, plat_fileinfo *info);
 void plat_closedir(plat_dir *d);
 
 #endif

@@ -78,10 +78,10 @@ int negotiate_protocol(int ours, int our_sub, int remote, int remote_sub);
  * -1 if it isn't one. */
 int parse_greeting(const char *line, int *protocol, int *sub, char *digests, size_t digestsize);
 
-/* Builds the argument list a pulling client sends to the daemon: the server
- * runs as sender of rem->path. Returns the count; strings point into buf
- * or at constants. */
-int build_server_args(const ars_options *o, const ars_remote *rem,
+/* Builds the argument list sent to the daemon. When pulling, the server
+ * runs as sender of rem->path; when pushing, as receiver into it. Returns
+ * the count; strings point into buf or at constants. */
+int build_server_args(const ars_options *o, const ars_remote *rem, int push,
                       const char **args, char *buf, size_t bufsize);
 
 /* Each of these returns an RERR_* exit code and prints its own errors. */
@@ -91,8 +91,8 @@ int session_list_modules(ars_session *s, const ars_options *o);
 int session_request(ars_session *s, const ars_remote *rem, const ars_options *o,
                     const char **args, int nargs);
 /* Reads compat flags, negotiates checksums, reads the seed, and starts
- * multiplexing in both directions. */
-int session_setup_protocol(ars_session *s, const ars_options *o);
+ * multiplexing in both directions; when pulling, sends the filter list. */
+int session_setup_protocol(ars_session *s, const ars_options *o, int push);
 /* Waits for the next reply to start, handling messages in front of it.
  * Returns WIRE_OK, WIRE_EINTR if a MSG_NO_SEND arrived (one reply fewer is
  * coming), or a stream error. */

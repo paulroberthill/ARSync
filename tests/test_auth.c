@@ -154,7 +154,7 @@ static void test_server_args(void)
 
     memset(&o, 0, sizeof o);
     parse_remote("rsync://h/pub", &r, err, sizeof err);
-    n = build_server_args(&o, &r, args, buf, sizeof buf);
+    n = build_server_args(&o, &r, 0, args, buf, sizeof buf);
     CHECK_EQ(n, 5);
     CHECK(strcmp(args[0], "--server") == 0);
     CHECK(strcmp(args[1], "--sender") == 0);
@@ -164,10 +164,21 @@ static void test_server_args(void)
 
     o.verbose = 2;
     parse_remote("h::pub/dir/file", &r, err, sizeof err);
-    n = build_server_args(&o, &r, args, buf, sizeof buf);
+    n = build_server_args(&o, &r, 0, args, buf, sizeof buf);
     CHECK_EQ(n, 5);
     CHECK(strcmp(args[2], "-vve.fxCIvu") == 0);
     CHECK(strcmp(args[4], "pub/dir/file") == 0);
+
+    /* Pushing: the server receives, so no --sender. */
+    o.verbose = 0;
+    o.recursive = o.times = 1;
+    parse_remote("h::up", &r, err, sizeof err);
+    n = build_server_args(&o, &r, 1, args, buf, sizeof buf);
+    CHECK_EQ(n, 4);
+    CHECK(strcmp(args[0], "--server") == 0);
+    CHECK(strcmp(args[1], "-tre.fxCIvu") == 0);
+    CHECK(strcmp(args[2], ".") == 0);
+    CHECK(strcmp(args[3], "up/") == 0);
 }
 
 void test_auth_suite(void)

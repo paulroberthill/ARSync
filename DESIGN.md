@@ -378,3 +378,27 @@ M1–M3 can be tested on the Amiga early, since they need very little filesystem
   function on `uint32_t`. As a macro it gave wrong digests on 64-bit hosts only. This was
   caught by the host test suite while the 68k suite passed.
 
+## 15. Pushing (M7, release 0.2.0)
+
+- **Roles:** the client is rsync's sender. It scans local files (breadth-first, one
+  directory open at a time), sorts them in rsync's order, and sends the list. It then answers
+  the server's requests in order: a delta against the server's copy, or an echo for items
+  that changed without a transfer. Phases and the goodbye mirror the pull side.
+- **No filter list:** a sending client sends none (the server's receiver only wants one with
+  `--delete`). Sending our empty one when pushing made the server read it as an empty file
+  list (found in testing).
+- **Writes may block:** an rsync receiver reads and writes in separate processes, so in a
+  push our writes may wait even with requests piling up unread (`conn.block_writes`). The
+  pull-side rule (never block a write with the input buffer full) would otherwise buffer
+  whole files in memory.
+- **Delta matching (`match.c`):** a hash table of the receiver's weak checksums, a rolling
+  window kept up to date byte by byte, and a seeded MD5 to confirm. Literal runs are sent
+  in 32 KiB tokens. An empty bucket is checked inline, so most positions cost no call.
+- **Symlinks** (AmigaDOS soft links) are listed with type link, as rsync's sender does
+  without `-l`; the server reports and skips them, and their size counts in "total size".
+  Devices and the like are skipped locally.
+- **Permissions sent:** POSIX hosts send the real mode bits. AmigaOS sends 0644 for files
+  and 0755 for directories, since mapping RWED would mark nearly everything executable.
+- **Byte counts** in the `-v` summary are counted from the end of the login exchange,
+  which is how rsync counts them.
+
