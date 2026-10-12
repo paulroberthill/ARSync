@@ -11,6 +11,7 @@ typedef struct ars_options {
     int port;           /* --port, 0 = default */
     int timeout;        /* --timeout seconds, 0 = none */
     int no_motd;
+    const char *password_file;
     int show_help;
     int show_version;
     int nargs;

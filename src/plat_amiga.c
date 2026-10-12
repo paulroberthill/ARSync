@@ -119,6 +119,47 @@ int plat_break_pending(void)
     return got_break;
 }
 
+int plat_read_password(const char *prompt, char *buf, size_t bufsize)
+{
+    BPTR in = Input(), out = Output();
+    int raw = IsInteractive(in) != 0;
+    size_t len = 0;
+    int rc = PLAT_OK;
+    char ch;
+
+    Write(out, (APTR)prompt, (LONG)strlen(prompt));
+    /* Raw mode stops the console echoing what's typed; we then handle
+     * line editing ourselves. Non-interactive input is read as is. */
+    if (raw)
+        SetMode(in, 1);
+    for (;;) {
+        if (Read(in, &ch, 1) != 1) {
+            rc = PLAT_EIO;
+            break;
+        }
+        if (ch == '\r' || ch == '\n')
+            break;
+        if (ch == 3) {                      /* Ctrl-C arrives as a character in raw mode */
+            got_break = 1;
+            rc = PLAT_EBREAK;
+            break;
+        }
+        if (ch == 8 || ch == 127) {         /* backspace / delete */
+            if (len > 0)
+                len--;
+        } else if (len + 1 < bufsize && (unsigned char)ch >= 32) {
+            buf[len++] = ch;
+        }
+    }
+    if (raw)
+        SetMode(in, 0);
+    Write(out, "\n", 1);
+    buf[len] = '\0';
+    if (plat_break_pending())
+        rc = PLAT_EBREAK;
+    return rc;
+}
+
 /* --- sockets --- */
 
 static int open_net(void)

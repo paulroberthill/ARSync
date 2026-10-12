@@ -24,9 +24,39 @@ static void usage(FILE *out)
             "      --port=PORT      daemon port (default 873)\n"
             "      --timeout=SECS   I/O timeout\n"
             "      --no-motd        suppress the daemon's message of the day\n"
+            "      --password-file=FILE  read the daemon password from FILE\n"
             "  -h, --help           show this help\n"
             "      --version        show version\n",
             ARS_PROTOCOL_VERSION);
+}
+
+/* Fetches rem from the daemon. */
+static int pull(const ars_remote *rem, const ars_options *opts)
+{
+    const char *args[SESSION_MAX_ARGS];
+    char argbuf[512];
+    ars_session s;
+    int nargs, rc;
+
+    nargs = build_server_args(opts, rem, args, argbuf, sizeof argbuf);
+    rc = session_open(&s, rem, opts);
+    if (rc == RERR_OK)
+        rc = session_request(&s, rem, opts, args, nargs);
+    if (rc == RERR_OK)
+        rc = session_setup_protocol(&s, opts);
+    if (rc == RERR_OK) {
+        /* The file list is next (milestone M3); wait for its first byte so
+         * the whole handshake is known to have worked. */
+        r_byte(&s.in);
+        if (s.in.err) {
+            rc = session_stream_failure(&s, "waiting for file list");
+        } else {
+            fprintf(stderr, "arsync: handshake complete; file list transfer is not implemented yet\n");
+            rc = RERR_UNSUPPORTED;
+        }
+    }
+    session_close(&s);
+    return rc;
 }
 
 static int ars_main(int argc, char **argv)
@@ -36,6 +66,9 @@ static int ars_main(int argc, char **argv)
     ars_remote rem;
     ars_session s;
     int rc;
+
+    /* Keep stdout (MOTD, server messages) in order with stderr errors. */
+    setvbuf(stdout, NULL, _IOLBF, BUFSIZ);
 
     if (options_parse(&opts, argc, argv, err, sizeof err) < 0) {
         fprintf(stderr, "arsync: %s\n", err);
@@ -65,19 +98,18 @@ static int ars_main(int argc, char **argv)
                 " (use rsync://HOST/MODULE or HOST::MODULE)\n", opts.args[0]);
         return RERR_SYNTAX;
     }
-    if (rem.path[0] != '\0') {
-        fprintf(stderr, "arsync: transfers are not implemented yet\n");
-        return RERR_UNSUPPORTED;
-    }
-    if (opts.nargs > 1) {
-        fprintf(stderr, "arsync: listing modules takes no destination\n");
-        return RERR_SYNTAX;
+    if (rem.path[0] == '\0') {
+        if (opts.nargs > 1) {
+            fprintf(stderr, "arsync: listing modules takes no destination\n");
+            return RERR_SYNTAX;
+        }
+        if ((rc = session_open(&s, &rem, &opts)) == RERR_OK)
+            rc = session_list_modules(&s, &opts);
+        session_close(&s);
+        return rc;
     }
 
-    if ((rc = session_open(&s, &rem, &opts)) == RERR_OK)
-        rc = session_list_modules(&s, &opts);
-    session_close(&s);
-    return rc;
+    return pull(&rem, &opts);
 }
 
 int main(int argc, char **argv)

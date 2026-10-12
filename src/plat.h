@@ -35,6 +35,9 @@ int plat_run(int (*fn)(int argc, char **argv), int argc, char **argv);
 /* Non-zero once Ctrl-C (AmigaOS) or SIGINT (POSIX) has been seen. Sticky. */
 int plat_break_pending(void);
 
+/* Prompts on the console and reads a line without echoing it. */
+int plat_read_password(const char *prompt, char *buf, size_t bufsize);
+
 /* --- TCP sockets --- */
 
 /* Resolves host (name or dotted quad), connects, and leaves the socket in

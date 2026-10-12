@@ -51,7 +51,8 @@ static int parse_long(ars_options *o, const char *opt, int argc, char **argv, in
     memcpy(name, opt, len);
     name[len] = '\0';
 
-    if ((target = numeric_option(o, name, &max)) != NULL) {
+    target = numeric_option(o, name, &max);
+    if (target || strcmp(name, "password-file") == 0) {
         if (eq) {
             val = eq + 1;
         } else if (*i + 1 < argc) {
@@ -59,6 +60,10 @@ static int parse_long(ars_options *o, const char *opt, int argc, char **argv, in
         } else {
             snprintf(err, errlen, "option --%s needs a value", name);
             return -1;
+        }
+        if (!target) {
+            o->password_file = val;
+            return 0;
         }
         if (parse_uint(val, max, target) < 0) {
             snprintf(err, errlen, "invalid value for --%s: %s", name, val);

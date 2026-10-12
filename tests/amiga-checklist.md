@@ -35,3 +35,18 @@ Testing on both socket setups is worthwhile at some point: UAE's emulated
 
 After each run, check that nothing is left behind: no requester, no lost memory
 (compare `avail` before and after a few runs).
+
+## M2 – authentication and protocol handshake
+
+Until M3, a successful handshake ends with
+`arsync: handshake complete; file list transfer is not implemented yet` and `$RC` 4.
+
+| # | Command | Expect |
+|---|---------|--------|
+| 1 | `arsync -vv rsync://127.0.0.1:8730/test/ RAM:dest` | `compat flags 0x…, checksum md5, seed …`, then the "handshake complete" line, `$RC` 4 |
+| 2 | `arsync rsync://amiga@127.0.0.1:8730/private/ RAM:dest`, type `secret` at `Password:` | Typing is **not echoed**; backspace works; then "handshake complete" |
+| 3 | Same, type a wrong password | `@ERROR: auth failed on module private`, `$RC` 5 |
+| 4 | Same, press **Ctrl-C** at the `Password:` prompt | Returns promptly, `$RC` 20, console not left in raw mode (typing in the Shell echoes normally afterwards) |
+| 5 | `echo secret >RAM:pw` then `arsync --password-file=RAM:pw rsync://amiga@127.0.0.1:8730/private/ RAM:dest` | "handshake complete", no prompt |
+| 6 | `setenv RSYNC_PASSWORD secret` then the command from 2 | No prompt, "handshake complete" (then `unsetenv RSYNC_PASSWORD`) |
+| 7 | `arsync rsync://127.0.0.1:8730/test/nope RAM:dest` | The server's `link_stat "nope" … No such file or directory` message is shown |

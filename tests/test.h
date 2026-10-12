@@ -35,5 +35,6 @@ void test_wire(void);
 void test_amitime(void);
 void test_plat(void);
 void test_session(void);
+void test_auth_suite(void);
 
 #endif

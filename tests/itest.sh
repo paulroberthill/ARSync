@@ -42,7 +42,19 @@ motd file = $WORK/motd
 
 [nocomment]
     path = $WORK/pub
+
+[private]
+    path = $WORK/pub
+    comment = needs a password
+    auth users = amiga
+    secrets file = $WORK/secrets
+    strict modes = no
 EOF
+echo "amiga:secret" > "$WORK/secrets"
+printf 'secret\n' > "$WORK/pw"
+chmod 600 "$WORK/pw"
+mkdir -p "$WORK/pub/sub"
+echo hello > "$WORK/pub/sub/file"
 
 # Pick a free port by letting the daemon fail on busy ones.
 PORT=
@@ -117,6 +129,34 @@ compare "connection refused" "rsync://127.0.0.1:$CLOSED/"
 expect "unknown host" 10 "rsync://no-such-host.invalid/"
 expect "local path rejected" 1 "Work:dir"
 expect "bad option" 1 --bogus "rsync://127.0.0.1:$PORT/"
+
+# --- authentication and protocol setup (M2) ---------------------------------
+# Until the file list is implemented (M3), a successful handshake ends with
+# exit code 4 ("not implemented yet") once the server starts sending it.
+
+URL="rsync://127.0.0.1:$PORT"
+AUTHURL="rsync://amiga@127.0.0.1:$PORT/private/"
+export RSYNC_PASSWORD=wrong
+compare "auth failure" "$AUTHURL" "$WORK/dest"
+unset RSYNC_PASSWORD
+compare "unknown module" "$URL/nosuchmodule/" "$WORK/dest"
+expect "handshake, public module" 4 "$URL/pub/" "$WORK/dest"
+expect "handshake, module subpath" 4 "$URL/pub/sub" "$WORK/dest"
+export RSYNC_PASSWORD=secret
+expect "auth via RSYNC_PASSWORD" 4 "$AUTHURL" "$WORK/dest"
+unset RSYNC_PASSWORD
+expect "auth via --password-file" 4 --password-file="$WORK/pw" "$AUTHURL" "$WORK/dest"
+expect "missing password file" 1 --password-file="$WORK/nope" "$AUTHURL" "$WORK/dest"
+
+"$ARSYNC" -vv --no-motd "$URL/pub/" "$WORK/dest" > "$WORK/got.out" 2>&1
+if grep -q "checksum md5" "$WORK/got.out" && grep -q "handshake complete" "$WORK/got.out"; then
+    PASS=$((PASS + 1))
+    echo "ok   checksum negotiated as md5"
+else
+    FAIL=$((FAIL + 1))
+    echo "FAIL checksum negotiated as md5"
+    sed 's/^/     /' "$WORK/got.out"
+fi
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

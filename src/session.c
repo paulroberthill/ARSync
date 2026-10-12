@@ -1,8 +1,12 @@
-/* session.c - rsync daemon session: connect, greeting, module requests */
+/* session.c - rsync daemon session: connect, greeting, module requests,
+ * authentication and the protocol setup that precedes a transfer */
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "session.h"
+#include "auth.h"
+#include "digest.h"
 #include "plat.h"
 
 #define LINE_MAX 4096
@@ -82,6 +86,7 @@ int session_open(ars_session *s, const ars_remote *rem, const ars_options *o)
     int rc;
 
     memset(s, 0, sizeof *s);
+    s->remote_exit = -1;
     if (o->verbose > 1)
         printf("opening tcp connection to %s port %d\n", rem->host, port);
     rc = conn_open(&s->conn, rem->host, port, o->timeout);
@@ -151,8 +156,262 @@ int session_list_modules(ars_session *s, const ars_options *o)
     }
 }
 
+/* --- module request and authentication --- */
+
+int build_server_args(const ars_options *o, const ars_remote *rem,
+                      const char **args, char *buf, size_t bufsize)
+{
+    char module[256];
+    size_t pos = 0;
+    int n = 0, i;
+
+    args[n++] = "--server";
+    args[n++] = "--sender";
+
+    /* One bundle of single-letter options, ending in our capabilities. */
+    args[n++] = buf + pos;
+    buf[pos++] = '-';
+    for (i = 0; i < o->verbose && i < 4; i++)
+        buf[pos++] = 'v';
+    pos += (size_t)snprintf(buf + pos, bufsize - pos, "e.%s", ARS_CLIENT_INFO) + 1;
+
+    args[n++] = ".";
+
+    /* A bare module name is sent as "module/", as rsync does. */
+    remote_module(rem, module, sizeof module);
+    if (strcmp(rem->path, module) == 0) {
+        args[n++] = buf + pos;
+        pos += (size_t)snprintf(buf + pos, bufsize - pos, "%s/", module) + 1;
+    } else {
+        args[n++] = rem->path;
+    }
+    return n;
+}
+
+static int authenticate(ars_session *s, const ars_remote *rem, const ars_options *o,
+                        const char *challenge)
+{
+    char password[256], response[64], line[512];
+    const char *user = rem->user, *env;
+    int digest, rc;
+
+    if (!*user && !(user = getenv("USER")) && !(user = getenv("LOGNAME")))
+        user = "";
+    if (!*user)
+        user = "nobody";
+
+    /* Protocol 32 servers list their digests; older ones always use md5. */
+    digest = s->remote_digests[0] ? choose_digest(ARS_AUTH_DIGESTS, s->remote_digests)
+                                  : DIGEST_MD5;
+    if (!digest) {
+        fprintf(stderr, "arsync: failed to negotiate a daemon auth checksum"
+                " (server offers: %s, we support: %s)\n", s->remote_digests, ARS_AUTH_DIGESTS);
+        return RERR_UNSUPPORTED;
+    }
+
+    if (o->password_file) {
+        if (read_password_file(o->password_file, password, sizeof password) < 0) {
+            fprintf(stderr, "arsync: failed to read a password from %s\n", o->password_file);
+            return RERR_SYNTAX;
+        }
+    } else if ((env = getenv("RSYNC_PASSWORD")) != NULL) {
+        snprintf(password, sizeof password, "%s", env);
+    } else if ((rc = plat_read_password("Password: ", password, sizeof password)) != PLAT_OK) {
+        return rc == PLAT_EBREAK ? RERR_SIGNAL : RERR_STARTCLIENT;
+    }
+
+    auth_response(digest, password, challenge, response);
+    memset(password, 0, sizeof password);
+    if (o->verbose > 1)
+        printf("authenticating as %s using %s\n", user, digest == DIGEST_MD5 ? "md5" : "md4");
+    snprintf(line, sizeof line, "%s %s", user, response);
+    if (send_line(s, line) != WIRE_OK)
+        return conn_failure(s, "failed to send authentication");
+    return RERR_OK;
+}
+
+int session_request(ars_session *s, const ars_remote *rem, const ars_options *o,
+                    const char **args, int nargs)
+{
+    char module[256], line[LINE_MAX];
+    int i, rc;
+
+    remote_module(rem, module, sizeof module);
+    if (send_line(s, module) != WIRE_OK)
+        return conn_failure(s, "failed to request module");
+
+    for (;;) {
+        if (conn_read_line(&s->conn, line, sizeof line) != WIRE_OK)
+            return conn_failure(s, "didn't get server startup line");
+        if (strncmp(line, "@RSYNCD: AUTHREQD ", 18) == 0) {
+            if ((rc = authenticate(s, rem, o, line + 18)) != RERR_OK)
+                return rc;
+            continue;
+        }
+        if (strcmp(line, "@RSYNCD: OK") == 0)
+            break;
+        if (strncmp(line, "@ERROR", 6) == 0) {
+            fprintf(stderr, "%s\n", line);
+            return RERR_STARTCLIENT;
+        }
+        if (strcmp(line, "@RSYNCD: EXIT") == 0) {
+            fprintf(stderr, "arsync: server ended the session\n");
+            return RERR_STARTCLIENT;
+        }
+        if (!o->no_motd)
+            printf("%s\n", line);
+    }
+
+    if (o->verbose > 2) {
+        printf("sending daemon args:");
+        for (i = 0; i < nargs; i++)
+            printf(" %s", args[i]);
+        printf("\n");
+    }
+    /* From protocol 30 the arguments are NUL-terminated, ending with an
+     * empty one. */
+    for (i = 0; i < nargs; i++)
+        w_bytes(&s->conn.w, args[i], strlen(args[i]) + 1);
+    w_byte(&s->conn.w, 0);
+    if (conn_flush(&s->conn) != WIRE_OK)
+        return conn_failure(s, "failed to send arguments");
+    return RERR_OK;
+}
+
+/* --- protocol setup and multiplexing --- */
+
+static int32_t le32(const uint8_t *p)
+{
+    return (int32_t)((uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24);
+}
+
+static int on_message(void *ctx, int tag, const uint8_t *payload, size_t len)
+{
+    ars_session *s = ctx;
+
+    switch (tag) {
+    case MSG_INFO:
+    case MSG_CLIENT:
+        fwrite(payload, 1, len, stdout);
+        fflush(stdout);
+        return WIRE_OK;
+    case MSG_ERROR:
+    case MSG_ERROR_XFER:
+        s->saw_error = 1;
+        /* fall through */
+    case MSG_WARNING:
+        fflush(stdout);
+        fwrite(payload, 1, len, stderr);
+        return WIRE_OK;
+    case MSG_IO_ERROR:
+        if (len != 4)
+            return WIRE_EPROTO;
+        s->remote_io_error |= le32(payload);
+        return WIRE_OK;
+    case MSG_ERROR_EXIT:
+        s->remote_exit = len == 4 ? le32(payload) : RERR_PARTIAL;
+        return WIRE_EABORT;
+    case MSG_LOG:
+    case MSG_NOOP:
+    case MSG_IO_TIMEOUT:
+        return WIRE_OK;
+    default:
+        return WIRE_EPROTO;
+    }
+}
+
+static int session_flush(ars_session *s)
+{
+    int rc;
+
+    if (s->multiplexing && (rc = mux_flush(&s->mux)) != WIRE_OK)
+        return s->out.err = rc;
+    return conn_flush(&s->conn);
+}
+
+int session_setup_protocol(ars_session *s, const ars_options *o)
+{
+    char theirs[256];
+    ars_reader *r = &s->conn.r;
+    ars_writer *w = &s->conn.w;
+
+    s->compat_flags = r_varint(r);
+    if (r->err)
+        return conn_failure(s, "failed to read compatibility flags");
+    if (s->compat_flags & CF_INC_RECURSE) {
+        fprintf(stderr, "arsync: server enabled incremental recursion, which we didn't offer\n");
+        return RERR_PROTOCOL;
+    }
+
+    /* Servers that understood our 'v' capability negotiate the checksum;
+     * older protocol-30/31 ones always use md5. */
+    s->checksum_type = DIGEST_MD5;
+    if (s->compat_flags & CF_VARINT_FLIST_FLAGS) {
+        w_vstring(w, ARS_CHECKSUMS, strlen(ARS_CHECKSUMS));
+        if (conn_flush(&s->conn) != WIRE_OK)
+            return conn_failure(s, "failed to send checksum list");
+        if (r_vstring(r, theirs, sizeof theirs) < 0)
+            return conn_failure(s, "failed to read checksum list");
+        if (!(s->checksum_type = choose_digest(ARS_CHECKSUMS, theirs))) {
+            fprintf(stderr, "arsync: failed to negotiate a checksum choice"
+                    " (server offers: %s, we support: %s)\n", theirs, ARS_CHECKSUMS);
+            return RERR_UNSUPPORTED;
+        }
+    }
+
+    s->checksum_seed = r_int32(r);
+    if (r->err)
+        return conn_failure(s, "failed to read checksum seed");
+
+    if (o->verbose > 1)
+        printf("compat flags 0x%lx, checksum %s, seed %ld\n", (long)s->compat_flags,
+               s->checksum_type == DIGEST_MD5 ? "md5" : "md4", (long)s->checksum_seed);
+
+    /* Everything from here on is multiplexed in both directions. */
+    demux_init(&s->demux, &s->conn.r, on_message, s);
+    demux_reader(&s->in, &s->demux);
+    if (mux_init(&s->mux, &s->conn.w) != WIRE_OK) {
+        fprintf(stderr, "arsync: out of memory\n");
+        return RERR_MALLOC;
+    }
+    mux_writer(&s->out, &s->mux);
+    s->multiplexing = 1;
+
+    /* Our (empty) filter list goes first. */
+    w_int32(&s->out, 0);
+    if (session_flush(s) != WIRE_OK)
+        return session_stream_failure(s, "failed to send filter list");
+    return RERR_OK;
+}
+
+int session_stream_failure(ars_session *s, const char *what)
+{
+    int err = s->in.err ? s->in.err : s->out.err;
+
+    if (err == WIRE_EABORT && s->remote_exit >= 0)
+        return s->remote_exit ? s->remote_exit : RERR_PARTIAL;
+    if (err == WIRE_EOF) {
+        fprintf(stderr, "arsync: connection unexpectedly closed (%s)\n", what);
+        return s->saw_error ? RERR_PARTIAL : RERR_STREAMIO;
+    }
+    if (err == WIRE_EPROTO) {
+        fprintf(stderr, "arsync: protocol error (%s)\n", what);
+        return RERR_PROTOCOL;
+    }
+    if (err == WIRE_ENOMEM) {
+        fprintf(stderr, "arsync: out of memory (%s)\n", what);
+        return RERR_MALLOC;
+    }
+    return conn_failure(s, what);
+}
+
 void session_close(ars_session *s)
 {
+    if (s->multiplexing) {
+        demux_free(&s->demux);
+        mux_free(&s->mux);
+        s->multiplexing = 0;
+    }
     if (s->connected)
         conn_close(&s->conn);
     s->connected = 0;

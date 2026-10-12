@@ -10,6 +10,7 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <termios.h>
 #include <unistd.h>
 #include <netinet/in.h>
 
@@ -66,6 +67,33 @@ int plat_run(int (*fn)(int argc, char **argv), int argc, char **argv)
 int plat_break_pending(void)
 {
     return got_break;
+}
+
+int plat_read_password(const char *prompt, char *buf, size_t bufsize)
+{
+    struct termios old, quiet;
+    FILE *tty = fopen("/dev/tty", "r+");
+    FILE *in = tty ? tty : stdin, *out = tty ? tty : stderr;
+    int echo_off, rc = PLAT_OK;
+
+    fputs(prompt, out);
+    fflush(out);
+    echo_off = tcgetattr(fileno(in), &old) == 0;
+    if (echo_off) {
+        quiet = old;
+        quiet.c_lflag &= ~(tcflag_t)ECHO;
+        tcsetattr(fileno(in), TCSAFLUSH, &quiet);
+    }
+    if (!fgets(buf, (int)bufsize, in))
+        rc = got_break ? PLAT_EBREAK : PLAT_EIO;
+    else
+        buf[strcspn(buf, "\r\n")] = '\0';
+    if (echo_off)
+        tcsetattr(fileno(in), TCSAFLUSH, &old);
+    fputs("\n", out);
+    if (tty)
+        fclose(tty);
+    return rc;
 }
 
 /* --- sockets --- */

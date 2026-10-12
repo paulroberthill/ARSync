@@ -304,3 +304,15 @@ M1–M3 can be tested on the Amiga early, since they need very little filesystem
 - **bsdsocket behaviour** (non-blocking I/O, `WaitSelect()` with Ctrl-C, `Errno()`
   values). It can't be exercised under vamos, so it's first tested at M1 on FS-UAE.
 
+## 11. Deliberate differences from rsync's client (so far)
+
+- **`@RSYNCD: EXIT` after a module request** (rather than after a listing request): rsync
+  silently exits 0; arsync reports "server ended the session" and exits 5.
+- **Password files aren't checked for permissions:** AmigaDOS has no owner or other bits.
+  rsync refuses files that others can read.
+- **No `-e.i`, `L` or `s`:** see §4. If a server still turns on incremental recursion,
+  arsync stops with a protocol error.
+- **Protocol 30/31 servers without varint file-list flags** (rsync 3.0.x–3.1.x) skip
+  checksum negotiation and use md5. The file-list decoder (M3) must also handle their
+  older flag encoding.
+
