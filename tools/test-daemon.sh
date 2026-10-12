@@ -21,9 +21,6 @@ trap 'exit 130' INT TERM
 
 mkdir -p "$WORK/test/sub" "$WORK/upload"
 
-cp /mnt/hd/LightwaveRTG.lha "$WORK/test"
-ls -asl "$WORK/test"
-
 echo "hello from the rsync daemon" > "$WORK/test/hello.txt"
 head -c 100000 /dev/urandom > "$WORK/test/sub/random.bin"
 cat > "$WORK/motd" <<'EOF'
