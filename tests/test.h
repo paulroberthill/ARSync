@@ -34,5 +34,6 @@ extern int test_failures;
 void test_wire(void);
 void test_amitime(void);
 void test_plat(void);
+void test_session(void);
 
 #endif

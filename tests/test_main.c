@@ -13,6 +13,7 @@ static int run_tests(int argc, char **argv)
     test_wire();
     test_amitime();
     test_plat();
+    test_session();
 
     printf("%d checks, %d failed\n", test_checks, test_failures);
     return test_failures ? 1 : 0;

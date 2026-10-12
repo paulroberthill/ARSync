@@ -14,7 +14,7 @@ protocol reference only — no upstream code is copied (keeps the licence choice
 
 | Feature | Notes |
 |---|---|
-| Transport: rsync daemon over TCP (`rsync://host[:port]/module/path`, `host::module/path`) | `bsdsocket.library`, called directly |
+| Transport: rsync daemon over TCP (`rsync://host[:port]/module/path`, `host::module/path`) | `bsdsocket.library`, called directly. A single colon (`Work:dir`) always means a local AmigaDOS path; there is no remote-shell form |
 | Module listing (`rsync://host/`) | Prints MOTD + module list |
 | Daemon authentication | Challenge-response using the strongest digest both sides know (md5 → md4); password from `--password-file` or `RSYNC_PASSWORD` |
 | **Pull** (server → Amiga) | First real transfer mode |

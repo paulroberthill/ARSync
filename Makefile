@@ -3,6 +3,7 @@
 #   make              host and Amiga builds of arsync and the unit tests
 #   make test         run the unit tests natively on the host
 #   make test-amiga   run the Amiga unit-test binary under vamos (68020)
+#   make itest        integration tests against a local rsync daemon
 #   make clean
 
 HOST_CC  ?= cc
@@ -18,9 +19,11 @@ AMIGA_RT = -mcrt=nix20 -m68020
 # -Wno-pointer-sign: the NDK's STRPTR is unsigned char *.
 AMIGA_CFLAGS = -std=gnu99 -O2 $(AMIGA_RT) $(WARN) -Wno-pointer-sign
 
-CORE_SRC = src/wire.c src/amitime.c src/plat_common.c
+CORE_SRC = src/wire.c src/amitime.c src/plat_common.c src/url.c src/options.c \
+           src/net.c src/session.c
 APP_SRC  = src/main.c
-TEST_SRC = tests/test_main.c tests/test_wire.c tests/test_amitime.c tests/test_plat.c
+TEST_SRC = tests/test_main.c tests/test_wire.c tests/test_amitime.c tests/test_plat.c \
+           tests/test_session.c
 
 HOST_DIR  = build/host
 AMIGA_DIR = build/amiga
@@ -32,7 +35,7 @@ AMIGA_CORE = $(call obj,$(AMIGA_DIR),$(CORE_SRC) src/plat_amiga.c)
 
 vpath %.c src tests
 
-.PHONY: all host amiga test test-amiga clean
+.PHONY: all host amiga test test-amiga itest clean
 
 all: host amiga
 
@@ -68,6 +71,9 @@ test: $(HOST_DIR)/arsync-test
 test-amiga: $(AMIGA_DIR)/arsync-test
 	@test -x $(VAMOS) || { echo "vamos not found: run tools/setup-vamos.sh"; exit 1; }
 	cd $(AMIGA_DIR) && $(abspath $(VAMOS)) -C 68020 arsync-test
+
+itest: $(HOST_DIR)/arsync
+	tests/itest.sh $(HOST_DIR)/arsync
 
 clean:
 	rm -rf build
