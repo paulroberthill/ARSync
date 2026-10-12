@@ -80,6 +80,18 @@ void pull_file_error(pull_state *p, const char *fmt, ...)
     p->xfer_error = 1;
 }
 
+int pull_check_break(pull_state *p)
+{
+    if (!plat_break_pending())
+        return RERR_OK;
+    if (!p->interrupted) {
+        fflush(stdout);
+        fprintf(stderr, "\narsync: interrupted by user\n");
+        p->interrupted = 1;
+    }
+    return RERR_SIGNAL;
+}
+
 /* --- flushing and the end-of-run exchange --- */
 
 static int flush(pull_state *p)
@@ -132,7 +144,8 @@ static int run_phases(pull_state *p, server_stats *stats)
          * is busy sending, and its data must be read first. */
         while (p->gen_next < p->fl.count && p->outstanding < PULL_WINDOW
                && p->s->conn.out_len <= CONN_OUT_HIGH)
-            if ((rc = gen_entry(p, p->gen_next++)) != RERR_OK)
+            if ((rc = gen_entry(p, p->gen_next++)) != RERR_OK
+                || (rc = pull_check_break(p)) != RERR_OK)
                 return rc;
         if (p->outstanding > 0) {
             if ((rc = recv_reply(p, 0, &done)) != RERR_OK)
@@ -225,11 +238,52 @@ static int resolve_dest(pull_state *p, const char *dest)
             return RERR_FILEIO;
         }
         p->dest_created = 1;
-        if (p->o->verbose)
+        if (p->o->verbose || p->o->progress)
             printf("created directory %s\n", p->dest);
         return RERR_OK;
     }
     p->dest_is_file = 1;
+    return RERR_OK;
+}
+
+/* Works out what the destination can hold. Names aren't checked when a
+ * single file is written to a name the user gave. */
+static int setup_rules(pull_state *p)
+{
+    const ars_options *o = p->o;
+    char dir[FLIST_MAXPATH];
+    char *slash;
+    long clashes;
+
+    p->rules.case_insensitive = plat_case_insensitive() || o->amiga_rules;
+    p->rules.max_file_size = o->amiga_rules ? 0x7FFFFFFF : plat_max_file_size();
+    if (p->dest_is_file) {
+        p->rules.name_max = 0;
+        return RERR_OK;
+    }
+
+    if (o->max_name >= 0) {
+        p->rules.name_max = o->max_name;
+    } else if (o->amiga_rules) {
+        p->rules.name_max = 30;
+    } else {
+        /* The destination may not exist yet (dry run): ask its parent. */
+        snprintf(dir, sizeof dir, "%s", p->dest);
+        if (p->o->dry_run && p->dest_created && (slash = strrchr(dir, '/')) != NULL)
+            *slash = '\0';
+        p->rules.name_max = plat_name_max(dir);
+    }
+    if (o->verbose > 1)
+        printf("names up to %d characters%s\n", p->rules.name_max,
+               p->rules.case_insensitive ? ", case-insensitive" : "");
+
+    if (p->rules.case_insensitive) {
+        clashes = fsmap_find_case_clashes(&p->fl, p->fstate, FS_CASE_CLASH);
+        if (clashes < 0) {
+            fprintf(stderr, "arsync: out of memory\n");
+            return RERR_MALLOC;
+        }
+    }
     return RERR_OK;
 }
 
@@ -249,7 +303,7 @@ static void set_dir_times(pull_state *p)
         if (!f->mode || !WIRE_ISDIR(f->mode) || (p->fstate[i] & FS_SKIPPED))
             continue;
         pull_local_path(p, i, local, sizeof local);
-        if ((rc = plat_set_mtime(local, f->mtime, (long)f->mtime_nsec)) != PLAT_OK
+        if ((rc = plat_set_mtime(local, plat_clamp_mtime(f->mtime), (long)f->mtime_nsec)) != PLAT_OK
             && rc != PLAT_ENOENT)
             pull_file_error(p, "arsync: failed to set times on %s: %s", local, plat_strerror(rc));
     }
@@ -306,7 +360,7 @@ int client_pull(ars_session *s, const ars_options *o, const char *dest)
     fmt.safe_flist = (s->compat_flags & CF_SAFE_FLIST) || s->protocol >= 31;
 
     /* rsync shows this only when directories are being transferred. */
-    show_flist = o->verbose && (o->recursive || o->list_only);
+    show_flist = (o->verbose || o->progress) && (o->recursive || o->list_only);
     if (show_flist)
         printf("receiving file list ... ");
     err[0] = '\0';
@@ -325,7 +379,9 @@ int client_pull(ars_session *s, const ars_options *o, const char *dest)
         }
         goto out;
     }
-    if (show_flist)
+    if (show_flist && o->progress)
+        printf("%lu file%sto consider\n", (unsigned long)p.fl.count, p.fl.count == 1 ? " " : "s ");
+    else if (show_flist)
         printf("done\n");
 
     /* With an empty list the server stops straight away (rsync's client
@@ -346,6 +402,8 @@ int client_pull(ars_session *s, const ars_options *o, const char *dest)
         }
         if ((rc = resolve_dest(&p, dest)) != RERR_OK)
             goto out;
+        if ((rc = setup_rules(&p)) != RERR_OK)
+            goto out;
     } else {
         p.listing = 1;
         list_files(&p);
@@ -360,6 +418,8 @@ int client_pull(ars_session *s, const ars_options *o, const char *dest)
         print_summary(&p, &stats);
 
 report:
+    if (p.interrupted || rc == RERR_SIGNAL)
+        goto out;
     /* As in rsync, any file-related error counts as a partial transfer. */
     io_error = p.fl.io_error | s->remote_io_error
                | (s->saw_xfer_error || p.xfer_error ? IOERR_GENERAL : 0);

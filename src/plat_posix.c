@@ -118,6 +118,36 @@ void plat_localtime(int64_t t, ars_tm *tm)
     tm->second = lt.tm_sec;
 }
 
+uint32_t plat_millis(void)
+{
+    struct timespec ts;
+
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint32_t)((uint64_t)ts.tv_sec * 1000 + (uint64_t)ts.tv_nsec / 1000000);
+}
+
+int64_t plat_max_file_size(void)
+{
+    return INT64_MAX;
+}
+
+int plat_name_max(const char *dir)
+{
+    long n = pathconf(dir, _PC_NAME_MAX);
+
+    return n > 0 ? (int)n : 255;
+}
+
+int plat_case_insensitive(void)
+{
+    return 0;
+}
+
+int64_t plat_clamp_mtime(int64_t t)
+{
+    return t;
+}
+
 /* --- sockets --- */
 
 int plat_tcp_connect(const char *host, int port, int *sock_out)

@@ -1,0 +1,37 @@
+Short:        rsync client (protocol 32, delta transfer)
+Author:       Paul Hill
+Uploader:     Paul Hill
+Type:         comm/tcp
+Version:      @VERSION@
+Architecture: m68k-amigaos >= 3.1
+Requires:     68020+, bsdsocket.library (Roadshow, AmiTCP, Miami)
+
+arsync fetches files from rsync daemons (rsync 3.0 or newer) using rsync's
+own protocol, version 32, including delta transfer: a big file with small
+changes is updated by sending only the changes.
+
+  arsync rsync://host/                      list modules
+  arsync rsync://host/module/dir            list files
+  arsync -rtv rsync://host/module/dir Work:Dir
+  arsync -t host::module/file RAM:file
+
+Features
+  - recursive pulls (-r), modification times (-t), dry run (-n),
+    progress (-P), verbose output and transfer summary (-v)
+  - delta transfer (MD5 block checksums), or whole files with -W
+  - password-protected modules (--password-file, RSYNC_PASSWORD, or prompt)
+  - output, options and exit codes like rsync's, so scripts carry over
+  - files AmigaDOS can't hold (':' in names, names too long for the
+    volume, names differing only in case, files of 2 GB or more) are
+    skipped with a warning, never renamed
+  - times converted to local time with the Locale time zone
+  - Ctrl-C works at any point and leaves no half-written files
+  - runs on its own 64 KB stack, so the Shell stack size doesn't matter
+
+Not (yet) supported: pushing to a server, --delete, excludes, -z
+compression, symlinks, permissions, ssh.
+
+Installation: copy arsync to C: (or anywhere in your path).
+
+Source and documentation: see README.md in the source distribution.
+Licence: MIT. Written from scratch; contains no rsync code.

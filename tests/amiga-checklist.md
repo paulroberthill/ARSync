@@ -91,3 +91,20 @@ behave differently. Compare results with `rsync -rt` of the same module on Linux
 | 2 | `arsync -rtv rsync://127.0.0.1:8730/test/ Work:t5` | `sub/random.bin` re-sent; **`received` is a few KB, not ~100,000** (speedup well above 1). File is byte-identical to the Linux copy afterwards (compare sizes, or pull it back with `-c`-less rsync and `cmp`) |
 | 3 | Same as 2 with `-W` | `received` ≈ 100,000 (whole file) |
 | 4 | Timing: point the daemon at a directory with a few MB-sized files, copy once, then change one file slightly and time `arsync -rt` vs `arsync -rtW` | Report both times and your CPU. Delta costs CPU (MD5 of the old file); on a slow 68k with a fast network `-W` can be quicker |
+
+## M6 – AmigaDOS limits, progress, Ctrl-C (release 0.1.0)
+
+For 1–3, point the test daemon at a directory containing: a file named `with:colon`, a
+file with a 40-character name, `Readme` and `README`, and (if you have space) a sparse
+3 GB file (`truncate -s 3G big`).
+
+| # | Command | Expect |
+|---|---------|--------|
+| 1 | `arsync -rtvv rsync://127.0.0.1:8730/test/ DH0:t6` on an **FFS** partition | `names up to 30 characters, case-insensitive`; one `arsync: skipping "…": reason` line per problem file; everything else copied; `$RC` 23 |
+| 2 | Same onto a **PFS3/SFS or long-name FFS** volume (if you have one) | `names up to 107 characters`; the 40-character name is copied |
+| 3 | Same on FFS with `--max-name=107` | The 40-character name is attempted. Note whether FFS refuses it (an error naming the file) or **silently truncates** it. That decides whether the 30 default must stay strict |
+| 4 | `arsync -rt --progress rsync://127.0.0.1:8730/test/ RAM:t7` | `receiving file list ... 4 files to consider`, names, and a progress line per file updating in place (`\r`), ending `(xfr#N, to-chk=M/T)` |
+| 5 | Ctrl-C while the generator is checksumming a large existing file (copy a big file once, change it, backdate it, pull again, press Ctrl-C immediately) | Stops within a second or so, `$RC` 20 |
+| 6 | Ctrl-C during a large download | Stops promptly, `$RC` 20, no `.name.NNNNNN` temp file left |
+| 7 | A file dated before 1978 on the server: copy with `-t`, then run again | The second run doesn't re-send it (its date shows as 1-Jan-78) |
+| 8 | `version arsync` and `arsync --version` | `arsync 0.1.0` |

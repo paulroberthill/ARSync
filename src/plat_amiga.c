@@ -165,6 +165,62 @@ void plat_localtime(int64_t t, ars_tm *tm)
     secs_to_civil(t - (int64_t)gmt_offset * 60, tm);
 }
 
+uint32_t plat_millis(void)
+{
+    struct DateStamp ds;
+
+    DateStamp(&ds);
+    return (uint32_t)ds.ds_Days * 86400000UL + (uint32_t)ds.ds_Minute * 60000UL
+           + (uint32_t)ds.ds_Tick * (1000 / TICKS_PER_SECOND);
+}
+
+int64_t plat_max_file_size(void)
+{
+    return 0x7FFFFFFF;
+}
+
+/* Filesystems known to take long names, by DOS type (first three bytes):
+ * FFS with long names (DOS\6, DOS\7), PFS (PFS, PDS), SFS. Everything else,
+ * including plain FFS/OFS, gets FFS's 30. */
+int plat_name_max(const char *dir)
+{
+    struct InfoData *id;
+    ULONG type = 0;
+    BPTR lock;
+
+    if ((lock = Lock((CONST_STRPTR)dir, SHARED_LOCK)) != 0) {
+        /* InfoData must be longword aligned, so not on the stack. */
+        if ((id = AllocVec(sizeof *id, MEMF_ANY)) != NULL) {
+            if (Info(lock, id))
+                type = (ULONG)id->id_DiskType;
+            FreeVec(id);
+        }
+        UnLock(lock);
+    }
+    switch (type >> 8) {
+    case 0x444F53:                       /* DOS */
+        return (type & 0xFF) == 6 || (type & 0xFF) == 7 ? 107 : 30;
+    case 0x504653:                       /* PFS */
+    case 0x504453:                       /* PDS */
+    case 0x534653:                       /* SFS */
+        return 107;
+    default:
+        return 30;
+    }
+}
+
+int plat_case_insensitive(void)
+{
+    return 1;
+}
+
+int64_t plat_clamp_mtime(int64_t t)
+{
+    int64_t earliest = AMIGA_EPOCH_OFFSET + (int64_t)gmt_offset * 60;
+
+    return t < earliest ? earliest : t;
+}
+
 /* --- sockets --- */
 
 static int open_net(void)

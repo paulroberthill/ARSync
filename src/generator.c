@@ -53,6 +53,10 @@ static int write_block_sums(pull_state *p, const char *local, int64_t size, int 
         return -1;
     write_sum_head(p, &sh);
     for (i = 0; i < sh.count; i++) {
+        /* Checksumming a big file takes a while on a 68k. Once Ctrl-C is
+         * pressed the run ends, so the remaining blocks don't matter. */
+        if ((i & 15) == 0 && plat_break_pending())
+            break;
         n = i == sh.count - 1 && sh.remainder ? sh.remainder : sh.blength;
         /* A short read (the file shrank, or an I/O error) leaves zeros,
          * which just won't match; the header is already sent, so every
@@ -122,7 +126,7 @@ static void gen_dir(pull_state *p, size_t ndx, const char *local)
                             local, plat_strerror(rc));
             goto skip_contents;
         }
-    } else if (p->o->times && st.mtime != f->mtime) {
+    } else if (p->o->times && st.mtime != plat_clamp_mtime(f->mtime)) {
         iflags = ITEM_REPORT_TIME;
     }
 
@@ -162,15 +166,16 @@ static void gen_file(pull_state *p, size_t ndx, const char *local)
     }
 
     if (rc == PLAT_OK) {
-        /* rsync's quick check: same size and same modification second. */
-        if (st.size == f->size && st.mtime == f->mtime) {
+        /* rsync's quick check: same size and same modification second
+         * (as the local filesystem can record it). */
+        if (st.size == f->size && st.mtime == plat_clamp_mtime(f->mtime)) {
             if (p->o->verbose > 1)
                 write_item(p, (int32_t)ndx, 0);
             return;
         }
         if (st.size != f->size)
             iflags |= ITEM_REPORT_SIZE;
-        if (!p->o->times || st.mtime != f->mtime)
+        if (!p->o->times || st.mtime != plat_clamp_mtime(f->mtime))
             iflags |= ITEM_REPORT_TIME;
     } else {
         iflags |= ITEM_IS_NEW;
@@ -183,6 +188,7 @@ int gen_entry(pull_state *p, size_t ndx)
 {
     const ars_file *f = &p->fl.files[ndx];
     char local[FLIST_MAXPATH];
+    const char *reason = NULL;
 
     if (!f->mode)
         return RERR_OK;
@@ -191,6 +197,21 @@ int gen_entry(pull_state *p, size_t ndx)
         return RERR_OK;
     }
     p->failed_dir[0] = '\0';
+
+    /* Things the destination can't hold are skipped, never altered. */
+    if (p->fstate[ndx] & FS_CASE_CLASH)
+        reason = "same name as another file when case is ignored";
+    else if (!p->dest_is_file)
+        reason = fsmap_check_name(&p->rules, flist_name(&p->fl, f));
+    if (!reason && WIRE_ISREG(f->mode) && f->size > p->rules.max_file_size)
+        reason = "file too large for this filesystem";
+    if (reason) {
+        pull_file_error(p, "arsync: skipping \"%s\": %s", flist_name(&p->fl, f), reason);
+        p->fstate[ndx] |= FS_SKIPPED;
+        if (WIRE_ISDIR(f->mode))
+            snprintf(p->failed_dir, sizeof p->failed_dir, "%s", flist_name(&p->fl, f));
+        return RERR_OK;
+    }
 
     pull_local_path(p, ndx, local, sizeof local);
     if (WIRE_ISDIR(f->mode))

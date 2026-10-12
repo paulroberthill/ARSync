@@ -39,5 +39,6 @@ void test_auth_suite(void);
 void test_flist_suite(void);
 void test_pull_suite(void);
 void test_checksum_suite(void);
+void test_fsmap_suite(void);
 
 #endif

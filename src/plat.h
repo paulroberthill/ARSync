@@ -42,6 +42,22 @@ int plat_read_password(const char *prompt, char *buf, size_t bufsize);
 struct ars_tm;
 void plat_localtime(int64_t t, struct ars_tm *tm);
 
+/* A millisecond clock for rates and progress (arbitrary start). */
+uint32_t plat_millis(void);
+
+/* --- what the local filesystem can hold --- */
+
+/* Largest file size that can be stored (OS 3.x dos.library: 2 GiB - 1). */
+int64_t plat_max_file_size(void);
+/* Longest name (in bytes) the filesystem holding dir accepts. AmigaOS
+ * goes by the volume's DOS type and falls back to 30, FFS's limit. */
+int plat_name_max(const char *dir);
+/* Whether names that differ only in case are the same file. */
+int plat_case_insensitive(void);
+/* The modification time a file actually gets when t is set (AmigaDOS
+ * can't go before 1978), so comparisons use what can be stored. */
+int64_t plat_clamp_mtime(int64_t t);
+
 /* --- TCP sockets --- */
 
 /* Resolves host (name or dotted quad), connects, and leaves the socket in

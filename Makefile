@@ -4,10 +4,12 @@
 #   make test         run the unit tests natively on the host
 #   make test-amiga   run the Amiga unit-test binary under vamos (68020)
 #   make itest        integration tests against a local rsync daemon
+#   make release      build/release/arsync-VERSION.lha (stripped Amiga binary + docs)
 #   make clean
 
 HOST_CC  ?= cc
 AMIGA_CC ?= /opt/amiga/bin/m68k-amigaos-gcc
+AMIGA_STRIP ?= /opt/amiga/bin/m68k-amigaos-strip
 VAMOS    ?= .venv/bin/vamos
 
 WARN = -Wall -Wextra -Wno-unused-parameter
@@ -22,11 +24,12 @@ AMIGA_CFLAGS = -std=gnu99 -O2 $(AMIGA_RT) $(WARN) -Wno-pointer-sign
 CORE_SRC = src/wire.c src/amitime.c src/plat_common.c src/url.c src/options.c \
            src/net.c src/session.c src/digest.c src/auth.c src/flist.c \
            src/output.c src/client.c src/generator.c src/receiver.c \
-           src/checksum.c
+           src/checksum.c src/fsmap.c src/progress.c
 APP_SRC  = src/main.c
 TEST_SRC = tests/test_main.c tests/test_wire.c tests/test_amitime.c tests/test_plat.c \
            tests/test_session.c tests/test_auth.c tests/test_flist.c \
-           tests/test_pull.c tests/test_checksum.c
+           tests/test_pull.c tests/test_checksum.c \
+           tests/test_fsmap.c
 
 HOST_DIR  = build/host
 AMIGA_DIR = build/amiga
@@ -38,7 +41,7 @@ AMIGA_CORE = $(call obj,$(AMIGA_DIR),$(CORE_SRC) src/plat_amiga.c)
 
 vpath %.c src tests
 
-.PHONY: all host amiga test test-amiga itest clean
+.PHONY: all host amiga test test-amiga itest release clean
 
 all: host amiga
 
@@ -77,6 +80,24 @@ test-amiga: $(AMIGA_DIR)/arsync-test
 
 itest: $(HOST_DIR)/arsync
 	tests/itest.sh $(HOST_DIR)/arsync
+
+VERSION = $(shell sed -n 's/^\#define ARSYNC_VERSION "\(.*\)"/\1/p' src/arsync.h)
+RELEASE_DIR = build/release/arsync
+
+release: $(AMIGA_DIR)/arsync
+	rm -rf build/release
+	mkdir -p $(RELEASE_DIR)
+	$(AMIGA_STRIP) -o $(RELEASE_DIR)/arsync $(AMIGA_DIR)/arsync
+	sed 's/@VERSION@/$(VERSION)/' dist/arsync.readme > $(RELEASE_DIR)/arsync.readme
+	cp README.md LICENSE $(RELEASE_DIR)/
+	@# Aminet wants .lha; Lhasa (often installed as "lha") can't create
+	@# archives, so fall back to .tar.gz when no LHA archiver is found.
+	@if lha 2>&1 | grep -q '^ *a '; then \
+	    (cd build/release && lha aq arsync-$(VERSION).lha arsync) && ls -l build/release/arsync-$(VERSION).lha; \
+	else \
+	    tar -C build/release -czf build/release/arsync-$(VERSION).tar.gz arsync && ls -l build/release/arsync-$(VERSION).tar.gz; \
+	    echo "note: no LHA archiver that can create archives (e.g. the 'lha' from jca02266/lha); made a .tar.gz instead"; \
+	fi
 
 clean:
 	rm -rf build

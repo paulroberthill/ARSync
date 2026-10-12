@@ -54,6 +54,9 @@ motd file = $WORK/motd
 [many]
     path = $WORK/many
 
+[names]
+    path = $WORK/names
+
 [private]
     path = $WORK/pub
     comment = needs a password
@@ -104,6 +107,15 @@ mkdir -p "$X/deep/a/b/c/d"
 echo deep > "$X/deep/a/b/c/d/file"
 printf 'secret' > "$X/unreadable"
 chmod 000 "$X/unreadable"
+
+# Names and sizes AmigaDOS can't hold (checked with --amiga-rules).
+N="$WORK/names"
+mkdir -p "$N/Docs" "$N/docs"
+for f in "with:colon" "a-name-that-is-forty-characters-long.txt" Readme README Docs/x docs/y normal \
+         "exactly-thirty-characters-long"; do
+    echo "$f" > "$N/$f"
+done
+truncate -s 3000000000 "$N/big-3g"
 
 # Lots of small files, to keep many requests in flight.
 mkdir -p "$WORK/many"
@@ -364,6 +376,64 @@ pull "whole file (-W) after change" times \
 pull "delta: a few of 3000 files changed" times \
     "'$RSYNC' -rt '$URL/many/' dest >/dev/null 2>&1; for f in d3/f7 d17/f50 d29/f99; do echo changed >> dest/\$f; $OLD dest/\$f; done" \
     -rtv "$URL/many/" @
+
+# --- AmigaDOS limits and progress (M6) ---------------------------------------
+
+# check NAME CONDITION... : passes if the shell test succeeds.
+check() {
+    name=$1
+    shift
+    if "$@"; then
+        PASS=$((PASS + 1))
+        echo "ok   $name"
+    else
+        FAIL=$((FAIL + 1))
+        echo "FAIL $name"
+        sed 's/^/     arsync stderr: /' "$WORK/got.err" 2>/dev/null | head -10
+    fi
+}
+
+rm -rf "$WORK/am"
+"$ARSYNC" -rt --amiga-rules "$URL/names/" "$WORK/am" > "$WORK/got.out" 2> "$WORK/got.err"
+echo $? > "$WORK/got.rc"
+check "amiga rules: exit code 23" [ "$(cat "$WORK/got.rc")" = 23 ]
+check "amiga rules: ':' skipped" [ ! -e "$WORK/am/with:colon" ]
+check "amiga rules: 40-char name skipped" [ ! -e "$WORK/am/a-name-that-is-forty-characters-long.txt" ]
+check "amiga rules: 30-char name kept" [ -f "$WORK/am/exactly-thirty-characters-long" ]
+check "amiga rules: case clash keeps first" [ -f "$WORK/am/README" -a ! -e "$WORK/am/Readme" ]
+check "amiga rules: clashing dir and contents skipped" [ -f "$WORK/am/Docs/x" -a ! -e "$WORK/am/docs" ]
+check "amiga rules: > 2 GiB skipped" [ ! -e "$WORK/am/big-3g" ]
+check "amiga rules: each skip reported" [ "$(grep -c '^arsync: skipping' "$WORK/got.err")" = 5 ]
+rm -rf "$WORK/am"
+"$ARSYNC" -rt --amiga-rules --max-name=107 "$URL/names/" "$WORK/am" > "$WORK/got.out" 2> "$WORK/got.err"
+check "--max-name=107 allows long names" [ -f "$WORK/am/a-name-that-is-forty-characters-long.txt" ]
+
+# --progress: same lines as rsync once rates and times are masked.
+for side in want got; do
+    rm -rf "$WORK/$side"
+    if [ $side = want ]; then
+        "$RSYNC" --no-inc-recursive -rt --progress "$XF/deep/" "$WORK/$side" > "$WORK/$side.out" 2>/dev/null
+    else
+        "$ARSYNC" -rt --progress "$XF/deep/" "$WORK/$side" > "$WORK/$side.out" 2>/dev/null
+    fi
+    tr '\r' '\n' < "$WORK/$side.out" | sed -e 's/ *[0-9.]*[kMG]B\/s/ RATE/' -e 's/[0-9]*:[0-9][0-9]:[0-9][0-9]/TIME/' \
+        -e "s|$WORK/$side|DEST|" -e 's/^sent.*/SUMMARY/' -e 's/speedup is .*/SPEEDUP/' > "$WORK/$side.norm"
+done
+check "--progress output matches rsync" cmp -s "$WORK/want.norm" "$WORK/got.norm" || diff "$WORK/want.norm" "$WORK/got.norm" | sed 's/^/     /'
+
+# Ctrl-C (SIGINT) mid-file: exit code 20 and no temp file left behind.
+truncate -s 400000000 "$X/sparse-400m"
+rm -rf "$WORK/int"
+mkdir -p "$WORK/int"
+"$ARSYNC" -t "$XF/sparse-400m" "$WORK/int/" > /dev/null 2> "$WORK/got.err" &
+apid=$!
+sleep 0.3
+kill -INT $apid
+wait $apid
+irc=$?
+rm -f "$X/sparse-400m"
+check "SIGINT mid-file exits 20" [ "$irc" = 20 ]
+check "SIGINT leaves no temp file" [ -z "$(find "$WORK/int" -name '.*' -type f)" ]
 
 # A small change to a 3 MB file must not resend the file.
 rm -rf "$WORK/eff"

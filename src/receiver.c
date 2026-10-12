@@ -77,7 +77,7 @@ static void log_name(pull_state *p, size_t ndx)
     const ars_file *f = &p->fl.files[ndx];
     const char *name = flist_name(&p->fl, f);
 
-    if (!p->o->verbose)
+    if (!p->o->verbose && !p->o->progress)
         return;
     printf("%s%s\n", name, WIRE_ISDIR(f->mode) ? "/" : "");
 }
@@ -128,10 +128,14 @@ static int read_tokens(pull_state *p, const ars_sum_head *sh, plat_file *f,
     const uint8_t *block;
     int32_t n, len;
     size_t chunk;
-    int write_failed = 0;
+    int write_failed = 0, rc;
 
     *written = 0;
     for (;;) {
+        if ((rc = pull_check_break(p)) != RERR_OK)
+            return rc;
+        if (p->o->progress)
+            progress_update(&p->progress, *written);
         n = r_int32(in);
         if (in->err)
             return stream_failure(p, "receiving file data");
@@ -218,6 +222,12 @@ static int receive_file(pull_state *p, size_t ndx)
         p->tmp[0] = '\0';
     }
 
+    /* With --progress the name comes first, then the progress line. */
+    if (p->o->progress) {
+        printf("%s\n", flist_name(&p->fl, fe));
+        progress_start(&p->progress, fe->size);
+    }
+
     /* Even without somewhere to write it, the data has to be read. */
     digest_init(&sum, p->s->checksum_type);
     rc = read_tokens(p, &sh, f, &sum, &written);
@@ -234,6 +244,10 @@ static int receive_file(pull_state *p, size_t ndx)
         return stream_failure(p, "reading file checksum");
     }
     digest_final(&sum, got);
+    p->xfr_count++;
+    if (p->o->progress)
+        progress_end(&p->progress, written, p->xfr_count,
+                     (long)(p->fl.count - ndx - 1), (long)p->fl.count);
     if (!f)
         return RERR_OK;
 
@@ -261,7 +275,8 @@ static int receive_file(pull_state *p, size_t ndx)
 
     existed = plat_stat(local, &st) == PLAT_OK && st.type == PLAT_T_FILE;
     plat_new_file_perms(p->tmp, fe->mode, existed ? local : NULL);
-    if (p->o->times && (rc = plat_set_mtime(p->tmp, fe->mtime, (long)fe->mtime_nsec)) != PLAT_OK)
+    if (p->o->times && (rc = plat_set_mtime(p->tmp, plat_clamp_mtime(fe->mtime),
+                                            (long)fe->mtime_nsec)) != PLAT_OK)
         pull_file_error(p, "arsync: failed to set times on %s: %s", local, plat_strerror(rc));
     if ((rc = plat_rename(p->tmp, local)) != PLAT_OK) {
         pull_file_error(p, "arsync: rename %s -> %s: %s", p->tmp, local, plat_strerror(rc));
@@ -269,7 +284,8 @@ static int receive_file(pull_state *p, size_t ndx)
         return RERR_OK;
     }
     p->tmp[0] = '\0';
-    log_name(p, ndx);
+    if (!p->o->progress)
+        log_name(p, ndx);
     return RERR_OK;
 }
 

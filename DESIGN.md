@@ -231,12 +231,13 @@ sums.
 | Remote | Amiga handling |
 |---|---|
 | `/` path separators | Kept; AmigaDOS uses `/` too. A leading `/` is forbidden. `..` components are rejected (sanitised like upstream) |
-| Name too long for the target volume | Ask the filesystem for its limit at start; skip the entry with a warning (no silent truncation) |
-| Names differing only by case | Second one gets a warning and is skipped |
+| Name too long for the target volume | Limit taken from the destination volume's DOS type: FFS/OFS 30, long-name FFS (`DOS\6`/`DOS\7`), PFS and SFS 107, anything unknown 30. `--max-name` overrides it. Entries over the limit are skipped with a warning; nothing is silently truncated |
+| Names differing only by case | The first in index order is kept and later ones are skipped with a warning; a skipped directory's contents go with it. Only ASCII letters are folded, since most names arrive as UTF-8 and their bytes mustn't be folded as Latin-1 |
 | Characters invalid on AmigaDOS (`:`) | Skipped with a warning |
 | UTF-8 names | v1: bytes passed through unchanged. v2: optional UTF-8 → Latin-1 (`--iconv`-like flag) |
 | mtime (Unix seconds) | Amiga `DateStamp` = Unix − 252,460,800 s (1978 epoch); ticks = nsec / 20 ms. Pre-1978 times clamp to 1978-01-01 |
 | Size > 2 GiB | Entry skipped with a warning (OS3 dos.library limit) |
+| mtime before 1978 | Stored as 1978-01-01. The quick check compares against that clamped value, so such files aren't re-sent every run |
 | Mode | v1: ignored (default RWED). v2 `-p`: owner r/w/x → R/W/E, D = W |
 | Symlinks, devices, specials | Not requested from the server; nothing to map |
 
@@ -346,4 +347,19 @@ M1–M3 can be tested on the Amiga early, since they need very little filesystem
   `-O2`. The loop tests the Z flag of the low word's `roxr` only. `checksum.c` therefore
   computes `ilog2` on 32-bit halves. Don't write 64-bit shift-then-test-for-zero loops in
   this code base.
+
+## 13. Release 0.1.0 (M6)
+
+- **Skipped entries:** anything AmigaDOS can't hold is skipped with
+  `arsync: skipping "NAME": reason`, and the run exits 23. `--amiga-rules` applies the same
+  rules (30-character names, case-insensitive, 2 GiB limit) on Linux, so the integration
+  tests can check them.
+- **Progress:** `--progress`/`-P` prints rsync's progress lines with integer arithmetic only,
+  so the Amiga build needs no floating point. rsync's `-P` also means `--partial`; arsync
+  never keeps partial files.
+- **Ctrl-C:** checked during every socket wait, every 16 blocks while checksumming, and on
+  every data token while receiving. The temp file is always removed. Exit code 20.
+- **Packaging:** `make release` builds `build/release/arsync-VERSION.lha`. It falls back to
+  `.tar.gz` when no LHA archiver that can create archives is installed; Lhasa can only
+  extract.
 

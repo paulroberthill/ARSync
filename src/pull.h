@@ -8,6 +8,8 @@
 #define PULL_H
 
 #include "flist.h"
+#include "fsmap.h"
+#include "progress.h"
 #include "plat.h"
 #include "session.h"
 
@@ -35,6 +37,7 @@
 /* Per-file state, alongside the file list. */
 #define FS_REDO 1           /* failed verification once; asked for again */
 #define FS_SKIPPED 2        /* not attempted (e.g. parent dir failed) */
+#define FS_CASE_CLASH 4     /* same name as an earlier entry, ignoring case */
 
 typedef struct pull_state {
     ars_session *s;
@@ -59,6 +62,10 @@ typedef struct pull_state {
 
     char failed_dir[FLIST_MAXPATH];  /* contents of this dir are skipped */
     int xfer_error;             /* some file failed: exit code 23 */
+    int interrupted;            /* Ctrl-C seen and reported */
+    ars_fsrules rules;          /* what the destination can hold */
+    long xfr_count;             /* files transferred, for --progress */
+    ars_progress progress;
 
     char tmp[FLIST_MAXPATH];    /* temp file being written, "" if none */
     uint8_t *buf;               /* CHUNK_SIZE bytes for file data */
@@ -82,6 +89,9 @@ void pull_local_path(const pull_state *p, size_t ndx, char *buf, size_t bufsize)
  * run ends with exit code 23. */
 void pull_file_error(pull_state *p, const char *fmt, ...)
     __attribute__((format(printf, 2, 3)));
+
+/* Returns RERR_SIGNAL (once reported) if Ctrl-C has been pressed. */
+int pull_check_break(pull_state *p);
 
 /* generator.c: handles one file-list entry, possibly writing a request.
  * Returns RERR_OK or a fatal exit code. */

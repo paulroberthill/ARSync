@@ -33,6 +33,10 @@ static int *numeric_option(ars_options *o, const char *name, int *max)
         *max = 1000000;
         return &o->timeout;
     }
+    if (strcmp(name, "max-name") == 0) {
+        *max = 1024;
+        return &o->max_name;
+    }
     return NULL;
 }
 
@@ -88,6 +92,10 @@ static int parse_long(ars_options *o, const char *opt, int argc, char **argv, in
         o->dry_run = 1;
     else if (strcmp(name, "whole-file") == 0)
         o->whole_file = 1;
+    else if (strcmp(name, "progress") == 0)
+        o->progress = 1;
+    else if (strcmp(name, "amiga-rules") == 0)
+        o->amiga_rules = 1;
     else if (strcmp(name, "archive") == 0)
         o->recursive = o->times = 1;
     else if (strcmp(name, "no-motd") == 0)
@@ -122,6 +130,11 @@ static int parse_short(ars_options *o, const char *opts, char *err, size_t errle
         case 'W':
             o->whole_file = 1;
             break;
+        case 'P':
+            /* rsync's -P is --partial --progress; arsync never keeps
+             * partial files, so it's just --progress. */
+            o->progress = 1;
+            break;
         case 'a':
             /* rsync's -a is -rlptgoD; of those arsync supports -r and -t. */
             o->recursive = o->times = 1;
@@ -143,6 +156,7 @@ int options_parse(ars_options *o, int argc, char **argv, char *err, size_t errle
     const char *a;
 
     memset(o, 0, sizeof *o);
+    o->max_name = -1;
     for (i = 1; i < argc; i++) {
         a = argv[i];
         if (!only_args && a[0] == '-' && a[1] != '\0') {
