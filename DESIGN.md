@@ -296,7 +296,7 @@ M1–M3 can be tested on the Amiga early, since they need very little filesystem
 4. **Push vs pull first:** pull first, as stated in the feasibility doc. Push is easier
    to implement, so swap them if pushing from the Amiga matters more to you.
 
-## 10. Assumptions to verify on a real Amiga / FS-UAE
+## 10. Assumptions verified on FS-UAE (M1–M6 checklist passed, 2026-10-12)
 
 - **`loc_GMTOffset` sign.** It's taken as minutes *west* of GMT (local = UTC − offset),
   matching AROS's interpretation. If transferred files show times off by twice the
@@ -362,4 +362,19 @@ M1–M3 can be tested on the Amiga early, since they need very little filesystem
 - **Packaging:** `make release` builds `build/release/arsync-VERSION.lha`. It falls back to
   `.tar.gz` when no LHA archiver that can create archives is installed; Lhasa can only
   extract.
+
+## 14. Performance notes
+
+- **Measured on the user's setup:** a large file with a small change took 24 s with delta
+  and 90 s with `-W`, so the link, not the CPU, dominates; delta is the right default.
+- **MD5/MD4 are fully unrolled:** every byte of every delta-transferred file goes through
+  MD5 two or three times. Unrolling made it about 1.8× faster than the compact
+  `switch`-per-step loop (vamos instruction-count benchmark, 4 MB: 4.95 s → 2.79 s).
+- **CPU flags:** `-m68040`/`-m68060`/`-m68020-60` made under 5% difference in that
+  benchmark. MD5 uses the same 32-bit add/logic/rotate instructions on every 68k, so the
+  generic 68020 build is kept. vamos doesn't model 040/060 pipelines, though, so real
+  hardware might gain slightly more.
+- **64-bit `unsigned long` pitfall:** the MD5 constants are `UL`, so the rotate is an inline
+  function on `uint32_t`. As a macro it gave wrong digests on 64-bit hosts only. This was
+  caught by the host test suite while the 68k suite passed.
 

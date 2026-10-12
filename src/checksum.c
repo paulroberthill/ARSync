@@ -80,11 +80,18 @@ int sum_sizes(int64_t len, int min_s2length, ars_sum_head *sh)
 
 uint32_t rolling_sum(const uint8_t *buf, size_t len)
 {
+    const int8_t *b = (const int8_t *)buf;
     uint32_t s1 = 0, s2 = 0;
-    size_t i;
+    size_t i = 0;
 
-    for (i = 0; i < len; i++) {
-        s1 += (uint32_t)(int32_t)(int8_t)buf[i];
+    /* Four bytes per round: s2 gains 4*s1 + 4*b0 + 3*b1 + 2*b2 + b3. */
+    for (; i + 4 <= len; i += 4) {
+        s2 += 4 * (s1 + (uint32_t)b[i]) + 3 * (uint32_t)b[i + 1] + 2 * (uint32_t)b[i + 2]
+              + (uint32_t)b[i + 3];
+        s1 += (uint32_t)b[i] + (uint32_t)b[i + 1] + (uint32_t)b[i + 2] + (uint32_t)b[i + 3];
+    }
+    for (; i < len; i++) {
+        s1 += (uint32_t)b[i];
         s2 += s1;
     }
     return (s1 & 0xFFFF) + (s2 << 16);
