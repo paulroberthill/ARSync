@@ -1,0 +1,308 @@
+/* plat_posix.c - platform layer for the POSIX host build */
+#include <dirent.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <netdb.h>
+#include <poll.h>
+#include <signal.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <netinet/in.h>
+
+#include "plat.h"
+
+struct plat_file {
+    int fd;
+};
+
+struct plat_dir {
+    DIR *dir;
+};
+
+static volatile sig_atomic_t got_break;
+
+static void on_sigint(int sig)
+{
+    (void)sig;
+    got_break = 1;
+}
+
+static int map_errno(int e)
+{
+    switch (e) {
+    case ENOENT:
+    case ENOTDIR:
+        return PLAT_ENOENT;
+    case EEXIST:
+    case ENOTEMPTY:
+        return PLAT_EEXIST;
+    case ENOMEM:
+        return PLAT_ENOMEM;
+    case EFBIG:
+    case EOVERFLOW:
+        return PLAT_ETOOBIG;
+    case EINTR:
+        return got_break ? PLAT_EBREAK : PLAT_EIO;
+    default:
+        return PLAT_EIO;
+    }
+}
+
+int plat_run(int (*fn)(int argc, char **argv), int argc, char **argv)
+{
+    struct sigaction sa;
+
+    memset(&sa, 0, sizeof sa);
+    sa.sa_handler = on_sigint;   /* no SA_RESTART: let poll() return EINTR */
+    sigaction(SIGINT, &sa, NULL);
+    signal(SIGPIPE, SIG_IGN);
+    return fn(argc, argv);
+}
+
+int plat_break_pending(void)
+{
+    return got_break;
+}
+
+/* --- sockets --- */
+
+int plat_tcp_connect(const char *host, int port, int *sock_out)
+{
+    struct addrinfo hints, *res, *ai;
+    char portstr[16];
+    int s = -1, rc;
+
+    memset(&hints, 0, sizeof hints);
+    hints.ai_family = AF_INET;   /* IPv4 only, matching the Amiga stacks */
+    hints.ai_socktype = SOCK_STREAM;
+    snprintf(portstr, sizeof portstr, "%d", port);
+    if (getaddrinfo(host, portstr, &hints, &res) != 0)
+        return PLAT_EHOST;
+
+    rc = PLAT_ECONN;
+    for (ai = res; ai; ai = ai->ai_next) {
+        s = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+        if (s < 0)
+            continue;
+        if (connect(s, ai->ai_addr, ai->ai_addrlen) == 0) {
+            rc = PLAT_OK;
+            break;
+        }
+        rc = errno == EINTR && got_break ? PLAT_EBREAK : PLAT_ECONN;
+        close(s);
+        s = -1;
+        if (rc == PLAT_EBREAK)
+            break;
+    }
+    freeaddrinfo(res);
+    if (rc != PLAT_OK)
+        return rc;
+
+    if (fcntl(s, F_SETFL, fcntl(s, F_GETFL) | O_NONBLOCK) < 0) {
+        close(s);
+        return PLAT_EIO;
+    }
+    *sock_out = s;
+    return PLAT_OK;
+}
+
+long plat_sock_send(int sock, const void *buf, size_t n)
+{
+    ssize_t r = send(sock, buf, n, MSG_NOSIGNAL);
+
+    if (r >= 0)
+        return (long)r;
+    if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
+        return PLAT_EAGAIN;
+    return PLAT_EIO;
+}
+
+long plat_sock_recv(int sock, void *buf, size_t n)
+{
+    ssize_t r = recv(sock, buf, n, 0);
+
+    if (r >= 0)
+        return (long)r;
+    if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
+        return PLAT_EAGAIN;
+    return PLAT_EIO;
+}
+
+int plat_sock_wait(int sock, int want_read, int want_write, long timeout_ms,
+                   int *readable, int *writable)
+{
+    struct pollfd pfd;
+    int r;
+
+    *readable = *writable = 0;
+    if (got_break)
+        return PLAT_EBREAK;
+    pfd.fd = sock;
+    pfd.events = (short)((want_read ? POLLIN : 0) | (want_write ? POLLOUT : 0));
+    pfd.revents = 0;
+    r = poll(&pfd, 1, timeout_ms < 0 ? -1 : (int)timeout_ms);
+    if (r < 0)
+        return errno == EINTR ? (got_break ? PLAT_EBREAK : PLAT_ETIMEOUT) : PLAT_EIO;
+    if (r == 0)
+        return PLAT_ETIMEOUT;
+    /* Errors and hangups count as readable so the next recv() reports them. */
+    *readable = (pfd.revents & (POLLIN | POLLHUP | POLLERR)) != 0;
+    *writable = (pfd.revents & POLLOUT) != 0;
+    return PLAT_OK;
+}
+
+void plat_sock_close(int sock)
+{
+    close(sock);
+}
+
+/* --- files --- */
+
+static int open_file(const char *path, int flags, plat_file **out)
+{
+    plat_file *f;
+    int fd = open(path, flags, 0666);
+
+    if (fd < 0)
+        return map_errno(errno);
+    if (!(f = malloc(sizeof *f))) {
+        close(fd);
+        return PLAT_ENOMEM;
+    }
+    f->fd = fd;
+    *out = f;
+    return PLAT_OK;
+}
+
+int plat_open_read(const char *path, plat_file **out)
+{
+    return open_file(path, O_RDONLY, out);
+}
+
+int plat_open_write(const char *path, plat_file **out)
+{
+    return open_file(path, O_WRONLY | O_CREAT | O_TRUNC, out);
+}
+
+long plat_read(plat_file *f, void *buf, size_t n)
+{
+    ssize_t r;
+
+    do
+        r = read(f->fd, buf, n);
+    while (r < 0 && errno == EINTR && !got_break);
+    return r < 0 ? map_errno(errno) : (long)r;
+}
+
+int plat_write(plat_file *f, const void *buf, size_t n)
+{
+    const char *p = buf;
+    ssize_t r;
+
+    while (n > 0) {
+        r = write(f->fd, p, n);
+        if (r < 0) {
+            if (errno == EINTR && !got_break)
+                continue;
+            return map_errno(errno);
+        }
+        p += r;
+        n -= (size_t)r;
+    }
+    return PLAT_OK;
+}
+
+int plat_seek(plat_file *f, int64_t offset)
+{
+    return lseek(f->fd, (off_t)offset, SEEK_SET) < 0 ? map_errno(errno) : PLAT_OK;
+}
+
+int plat_close(plat_file *f)
+{
+    int rc = close(f->fd) < 0 ? map_errno(errno) : PLAT_OK;
+
+    free(f);
+    return rc;
+}
+
+int plat_stat(const char *path, plat_fileinfo *st)
+{
+    struct stat sb;
+
+    if (stat(path, &sb) < 0)
+        return map_errno(errno);
+    st->type = S_ISREG(sb.st_mode) ? PLAT_T_FILE : S_ISDIR(sb.st_mode) ? PLAT_T_DIR : PLAT_T_OTHER;
+    st->size = (int64_t)sb.st_size;
+    st->mtime = (int64_t)sb.st_mtim.tv_sec;
+    st->mtime_nsec = sb.st_mtim.tv_nsec;
+    return PLAT_OK;
+}
+
+int plat_mkdir(const char *path)
+{
+    return mkdir(path, 0777) < 0 ? map_errno(errno) : PLAT_OK;
+}
+
+int plat_remove(const char *path)
+{
+    return remove(path) < 0 ? map_errno(errno) : PLAT_OK;
+}
+
+int plat_rename(const char *from, const char *to)
+{
+    return rename(from, to) < 0 ? map_errno(errno) : PLAT_OK;
+}
+
+int plat_set_mtime(const char *path, int64_t mtime, long nsec)
+{
+    struct timespec ts[2];
+
+    ts[0].tv_sec = 0;
+    ts[0].tv_nsec = UTIME_OMIT;    /* leave atime alone */
+    ts[1].tv_sec = (time_t)mtime;
+    ts[1].tv_nsec = nsec;
+    return utimensat(AT_FDCWD, path, ts, 0) < 0 ? map_errno(errno) : PLAT_OK;
+}
+
+int plat_opendir(const char *path, plat_dir **out)
+{
+    plat_dir *d;
+    DIR *dir = opendir(path);
+
+    if (!dir)
+        return map_errno(errno);
+    if (!(d = malloc(sizeof *d))) {
+        closedir(dir);
+        return PLAT_ENOMEM;
+    }
+    d->dir = dir;
+    *out = d;
+    return PLAT_OK;
+}
+
+int plat_readdir(plat_dir *d, char *name, size_t namesize)
+{
+    struct dirent *de;
+
+    for (;;) {
+        errno = 0;
+        if (!(de = readdir(d->dir)))
+            return errno ? map_errno(errno) : 0;
+        if (strcmp(de->d_name, ".") != 0 && strcmp(de->d_name, "..") != 0)
+            break;
+    }
+    if (strlen(de->d_name) >= namesize)
+        return PLAT_ETOOBIG;
+    strcpy(name, de->d_name);
+    return 1;
+}
+
+void plat_closedir(plat_dir *d)
+{
+    closedir(d->dir);
+    free(d);
+}
