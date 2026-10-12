@@ -24,6 +24,10 @@ typedef struct ars_conn {
     size_t out_len, out_cap;
     int eof;
     int plat_err;       /* PLAT_E* behind the last failure, for reporting */
+    /* Called before waiting for input, so that output buffered in layers
+     * above (the multiplexer) is sent first. Optional. */
+    int (*before_wait)(void *ctx);
+    void *before_wait_ctx;
     ars_reader r;       /* raw byte stream from the peer */
     ars_writer w;       /* raw byte stream to the peer */
 } ars_conn;

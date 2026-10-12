@@ -64,6 +64,9 @@ typedef struct ars_session {
     int remote_exit;            /* from MSG_ERROR_EXIT, -1 if none */
     int saw_error;              /* server reported an error message */
     int saw_xfer_error;         /* ...one about a file (makes the exit code 23) */
+    int no_send_pending;        /* MSG_NO_SEND notices not yet accounted for:
+                                 * files the server couldn't send */
+    int awaiting_reply;         /* inside session_wait_reply() */
 } ars_session;
 
 /* Picks the protocol version both sides speak, mirroring rsync's rule: the
@@ -90,6 +93,10 @@ int session_request(ars_session *s, const ars_remote *rem, const ars_options *o,
 /* Reads compat flags, negotiates checksums, reads the seed, and starts
  * multiplexing in both directions. */
 int session_setup_protocol(ars_session *s, const ars_options *o);
+/* Waits for the next reply to start, handling messages in front of it.
+ * Returns WIRE_OK, WIRE_EINTR if a MSG_NO_SEND arrived (one reply fewer is
+ * coming), or a stream error. */
+int session_wait_reply(ars_session *s);
 /* Maps a failure on s->in / s->out onto an exit code, after reporting it. */
 int session_stream_failure(ars_session *s, const char *what);
 void session_close(ars_session *s);

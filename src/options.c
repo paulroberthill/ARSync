@@ -82,6 +82,12 @@ static int parse_long(ars_options *o, const char *opt, int argc, char **argv, in
         o->recursive = 1;
     else if (strcmp(name, "list-only") == 0)
         o->list_only = 2;
+    else if (strcmp(name, "times") == 0)
+        o->times = 1;
+    else if (strcmp(name, "dry-run") == 0)
+        o->dry_run = 1;
+    else if (strcmp(name, "archive") == 0)
+        o->recursive = o->times = 1;
     else if (strcmp(name, "no-motd") == 0)
         o->no_motd = 1;
     else if (strcmp(name, "help") == 0)
@@ -104,6 +110,16 @@ static int parse_short(ars_options *o, const char *opts, char *err, size_t errle
             break;
         case 'r':
             o->recursive = 1;
+            break;
+        case 't':
+            o->times = 1;
+            break;
+        case 'n':
+            o->dry_run = 1;
+            break;
+        case 'a':
+            /* rsync's -a is -rlptgoD; of those arsync supports -r and -t. */
+            o->recursive = o->times = 1;
             break;
         case 'h':
             o->show_help = 1;

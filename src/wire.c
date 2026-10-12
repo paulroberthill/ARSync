@@ -64,6 +64,23 @@ void w_byte(ars_writer *w, uint8_t v)
     w_bytes(w, &v, 1);
 }
 
+uint16_t r_uint16(ars_reader *r)
+{
+    uint8_t b[2];
+
+    r_bytes(r, b, 2);
+    return (uint16_t)(b[0] | b[1] << 8);
+}
+
+void w_uint16(ars_writer *w, uint16_t v)
+{
+    uint8_t b[2];
+
+    b[0] = (uint8_t)v;
+    b[1] = (uint8_t)(v >> 8);
+    w_bytes(w, b, 2);
+}
+
 int32_t r_int32(ars_reader *r)
 {
     uint8_t b[4];
@@ -425,25 +442,13 @@ void demux_free(ars_demux *d)
     d->msgbuf = NULL;
 }
 
-static int demux_read(void *ctx, uint8_t *dst, size_t n)
+int demux_fill(ars_demux *d)
 {
-    ars_demux *d = ctx;
     uint8_t hdr[4];
-    size_t len, chunk;
+    size_t len;
     int tag, rc;
 
-    while (n > 0) {
-        if (d->data_left > 0) {
-            chunk = n < d->data_left ? n : d->data_left;
-            r_bytes(d->raw, dst, chunk);
-            if (d->raw->err)
-                return d->raw->err;
-            d->data_left -= chunk;
-            dst += chunk;
-            n -= chunk;
-            continue;
-        }
-
+    while (d->data_left == 0) {
         r_bytes(d->raw, hdr, 4);
         if (d->raw->err)
             return d->raw->err;
@@ -466,6 +471,26 @@ static int demux_read(void *ctx, uint8_t *dst, size_t n)
             if (rc != WIRE_OK)
                 return rc;
         }
+    }
+    return WIRE_OK;
+}
+
+static int demux_read(void *ctx, uint8_t *dst, size_t n)
+{
+    ars_demux *d = ctx;
+    size_t chunk;
+    int rc;
+
+    while (n > 0) {
+        if ((rc = demux_fill(d)) != WIRE_OK)
+            return rc;
+        chunk = n < d->data_left ? n : d->data_left;
+        r_bytes(d->raw, dst, chunk);
+        if (d->raw->err)
+            return d->raw->err;
+        d->data_left -= chunk;
+        dst += chunk;
+        n -= chunk;
     }
     return WIRE_OK;
 }

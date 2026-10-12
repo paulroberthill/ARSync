@@ -47,6 +47,13 @@ motd file = $WORK/motd
     path = $WORK/tree
     comment = listing and sort-order fixtures
 
+[xfer]
+    path = $WORK/xfer
+    comment = transfer fixtures
+
+[many]
+    path = $WORK/many
+
 [private]
     path = $WORK/pub
     comment = needs a password
@@ -84,6 +91,32 @@ chmod 1777 "$T/sticky"
 chmod 0444 "$T/z"
 chmod 0600 "$T/_u"
 ln -s a "$T/link-to-a"
+
+# Transfer fixtures: like the tree above minus the 5 GB file, plus data
+# that spans many 32 KiB chunks, and a file the daemon can't read.
+X="$WORK/xfer"
+mkdir -p "$X"
+cp -a "$T/." "$X/"
+rm "$X/big-sparse"
+head -c 3000000 /dev/urandom > "$X/random-3m"
+head -c 32768 /dev/urandom > "$X/exactly-one-chunk"
+mkdir -p "$X/deep/a/b/c/d"
+echo deep > "$X/deep/a/b/c/d/file"
+printf 'secret' > "$X/unreadable"
+chmod 000 "$X/unreadable"
+
+# Lots of small files, to keep many requests in flight.
+mkdir -p "$WORK/many"
+i=0
+while [ $i -lt 30 ]; do
+    mkdir -p "$WORK/many/d$i"
+    j=0
+    while [ $j -lt 100 ]; do
+        printf '%s-%s\n' "$i" "$j" > "$WORK/many/d$i/f$j"
+        j=$((j + 1))
+    done
+    i=$((i + 1))
+done
 
 # Pick a free port by letting the daemon fail on busy ones.
 PORT=
@@ -214,6 +247,96 @@ else
     echo "FAIL list -v -r (summary byte counts)"
     diff "$WORK/want.out" "$WORK/got.out" | sed 's/^/     /'
 fi
+
+# --- transfers (M4) ----------------------------------------------------------
+# Each case pulls the same thing with rsync (into $WORK/want) and arsync
+# (into $WORK/got) and compares the resulting trees - names, types, sizes,
+# permissions, modification times (with -t) and contents - plus stdout and
+# exit codes. rsync runs with --no-inc-recursive, as arsync always does.
+
+# Lists a tree's metadata; with "notimes", file times are left out.
+tree_sig() {
+    if [ "${2:-}" = notimes ]; then
+        (cd "$1" && find . -printf '%P|%y|%s|%m\n' | sort)
+    else
+        (cd "$1" && find . ! -name . -printf '%P|%y|%s|%m|%T@\n' | sort)
+    fi
+}
+
+# pull NAME SIG-MODE SETUP ARGS... : SETUP is a shell snippet run in both
+# destinations first (with $D set), e.g. to pre-populate them. Use "@" in
+# ARGS for the destination.
+pull() {
+    name=$1
+    mode=$2
+    setup=$3
+    shift 3
+    for side in want got; do
+        D="$WORK/$side"
+        rm -rf "$D"
+        mkdir -p "$D"
+        [ -n "$setup" ] && (cd "$D" && eval "$setup")
+        set -- "$@"
+        args=
+        for a in "$@"; do
+            [ "$a" = "@" ] && a="$D/dest"
+            args="$args '$a'"
+        done
+        if [ $side = want ]; then
+            eval "\"$RSYNC\" --no-inc-recursive $args" > "$WORK/$side.out" 2> "$WORK/$side.err"
+        else
+            eval "\"$ARSYNC\" $args" > "$WORK/$side.out" 2> "$WORK/$side.err"
+        fi
+        echo $? > "$WORK/$side.rc"
+        # Byte counts and rates depend on timing (how the server's output
+        # happens to be split into frames); destination paths differ by side.
+        sed -i -e 's/^sent [0-9,]* bytes  received [0-9,]* bytes  [0-9.,]* bytes\/sec$/sent N bytes  received N bytes/' \
+               -e 's/speedup is [0-9.,]*/speedup is N/' -e "s|$WORK/$side|DEST|g" "$WORK/$side.out"
+    done
+    ok=1
+    cmp -s "$WORK/want.rc" "$WORK/got.rc" || ok=0
+    cmp -s "$WORK/want.out" "$WORK/got.out" || ok=0
+    if [ -e "$WORK/want/dest" ] || [ -e "$WORK/got/dest" ]; then
+        tree_sig "$WORK/want/dest" "$mode" > "$WORK/want.sig" 2>/dev/null
+        tree_sig "$WORK/got/dest" "$mode" > "$WORK/got.sig" 2>/dev/null
+        cmp -s "$WORK/want.sig" "$WORK/got.sig" || ok=0
+        diff -r "$WORK/want/dest" "$WORK/got/dest" > /dev/null 2>&1 || ok=0
+    fi
+    if [ $ok = 1 ]; then
+        PASS=$((PASS + 1))
+        echo "ok   $name"
+    else
+        FAIL=$((FAIL + 1))
+        echo "FAIL $name (exit: rsync $(cat "$WORK/want.rc"), arsync $(cat "$WORK/got.rc"))"
+        diff "$WORK/want.out" "$WORK/got.out" | sed 's/^/     stdout: /'
+        diff "$WORK/want.sig" "$WORK/got.sig" 2>/dev/null | head -20 | sed 's/^/     tree: /'
+        sed 's/^/     arsync stderr: /' "$WORK/got.err" | head -10
+    fi
+}
+
+XF="$URL/xfer"
+pull "pull -rt into new dir" times "" -rt "$XF/" @
+pull "pull -rtv into new dir" times "" -rtv "$XF/" @
+pull "pull -rt again (nothing changes)" times \
+    "'$RSYNC' -rt '$XF/' dest >/dev/null 2>&1" -rtv "$XF/" @
+pull "pull -rt after local changes" times \
+    "'$RSYNC' -rt '$XF/' dest >/dev/null 2>&1; echo changed > dest/a; touch -d 2001-01-01 dest/a dest/z; rm dest/b/x; rm -rf dest/d1" \
+    -rtv "$XF/" @
+pull "pull -r without -t" notimes "" -rv "$XF/" @
+pull "pull dir without trailing slash" times "" -rtv "$XF/deep" @
+pull "pull single file to new name" times "" -tv "$XF/random-3m" @
+pull "pull single file into existing dir" times "mkdir dest" -tv "$XF/random-3m" @
+pull "pull single file over existing file" times "echo old > dest" -t "$XF/random-3m" @
+pull "pull to dest with trailing slash" times "" -t "$XF/random-3m" @/
+pull "dry run -n" times "" -rtnv "$XF/" @
+pull "dry run -n after copy" times \
+    "'$RSYNC' -rt '$XF/' dest >/dev/null 2>&1; echo changed > dest/a; touch -d 2001-01-01 dest/a" -rtnv "$XF/" @
+pull "file in place of dir and dir in place of file" times \
+    "mkdir -p dest/z && : > dest/b" -rt "$XF/" @
+pull "non-empty dir in place of file" times \
+    "mkdir -p dest/z/keep && touch -d 2001-01-01 dest/z/keep dest/z" -rt "$XF/" @
+pull "3000 small files" times "" -rt "$URL/many/" @
+pull "3000 small files again" times "'$RSYNC' -rt '$URL/many/' dest >/dev/null 2>&1" -rtv "$URL/many/" @
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

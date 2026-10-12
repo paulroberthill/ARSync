@@ -19,6 +19,7 @@
 #define WIRE_EPROTO (-3)   /* malformed or out-of-range data */
 #define WIRE_ENOMEM (-4)
 #define WIRE_EABORT (-5)   /* a message handler asked to stop */
+#define WIRE_EINTR (-6)    /* a message handler interrupted demux_fill() */
 
 typedef struct ars_reader {
     /* Read exactly n bytes into dst; return WIRE_OK or a WIRE_E* code. */
@@ -38,6 +39,7 @@ typedef struct ars_writer {
 
 void r_bytes(ars_reader *r, void *dst, size_t n);
 uint8_t r_byte(ars_reader *r);
+uint16_t r_uint16(ars_reader *r);
 int32_t r_int32(ars_reader *r);
 int64_t r_longint(ars_reader *r);
 int32_t r_varint(ars_reader *r);
@@ -48,6 +50,7 @@ int r_vstring(ars_reader *r, char *buf, size_t bufsize);
 
 void w_bytes(ars_writer *w, const void *src, size_t n);
 void w_byte(ars_writer *w, uint8_t v);
+void w_uint16(ars_writer *w, uint16_t v);
 void w_int32(ars_writer *w, int32_t v);
 void w_longint(ars_writer *w, int64_t v);
 void w_varint(ars_writer *w, int32_t v);
@@ -130,6 +133,9 @@ typedef struct ars_demux {
 void demux_init(ars_demux *d, ars_reader *raw, ars_msg_fn on_msg, void *msg_ctx);
 void demux_free(ars_demux *d);
 void demux_reader(ars_reader *r, ars_demux *d);
+/* Reads (and dispatches) any messages in front of the next data byte,
+ * leaving that byte ready. Returns WIRE_OK or the error/handler code. */
+int demux_fill(ars_demux *d);
 
 /* Multiplexer: wraps plain writes into MSG_DATA frames. Data is buffered
  * and only framed on a full buffer, mux_flush() or mux_send_msg(). */

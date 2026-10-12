@@ -27,6 +27,7 @@ struct plat_dir {
 };
 
 static volatile sig_atomic_t got_break;
+static mode_t saved_umask = 022;
 
 static void on_sigint(int sig)
 {
@@ -63,6 +64,8 @@ int plat_run(int (*fn)(int argc, char **argv), int argc, char **argv)
     sa.sa_handler = on_sigint;   /* no SA_RESTART: let poll() return EINTR */
     sigaction(SIGINT, &sa, NULL);
     signal(SIGPIPE, SIG_IGN);
+    saved_umask = umask(0);
+    umask(saved_umask);
     return fn(argc, argv);
 }
 
@@ -313,6 +316,18 @@ int plat_set_mtime(const char *path, int64_t mtime, long nsec)
     ts[1].tv_sec = (time_t)mtime;
     ts[1].tv_nsec = nsec;
     return utimensat(AT_FDCWD, path, ts, 0) < 0 ? map_errno(errno) : PLAT_OK;
+}
+
+int plat_new_file_perms(const char *path, uint32_t wire_mode, const char *existing)
+{
+    struct stat sb;
+    mode_t mode;
+
+    if (existing && stat(existing, &sb) == 0)
+        mode = sb.st_mode & 07777;
+    else
+        mode = (mode_t)(wire_mode & 0777) & ~saved_umask;
+    return chmod(path, mode) < 0 ? map_errno(errno) : PLAT_OK;
 }
 
 int plat_opendir(const char *path, plat_dir **out)

@@ -99,6 +99,8 @@ static int conn_read(void *ctx, uint8_t *dst, size_t n)
         }
         if (c->eof)
             return WIRE_EOF;
+        if (c->before_wait && (rc = c->before_wait(c->before_wait_ctx)) != WIRE_OK)
+            return rc;
         if ((rc = pump(c, 1)) != WIRE_OK)
             return rc;
     }

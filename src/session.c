@@ -174,8 +174,12 @@ int build_server_args(const ars_options *o, const ars_remote *rem,
     buf[pos++] = '-';
     for (i = 0; i < o->verbose && i < 4; i++)
         buf[pos++] = 'v';
+    if (o->dry_run)
+        buf[pos++] = 'n';
     if (o->list_only && !o->recursive)
         buf[pos++] = 'd';        /* list a directory's contents, not just itself */
+    if (o->times)
+        buf[pos++] = 't';
     if (o->recursive)
         buf[pos++] = 'r';
     pos += (size_t)snprintf(buf + pos, bufsize - pos, "e.%s", ARS_CLIENT_INFO) + 1;
@@ -320,6 +324,15 @@ static int on_message(void *ctx, int tag, const uint8_t *payload, size_t len)
     case MSG_ERROR_EXIT:
         s->remote_exit = len == 4 ? le32(payload) : RERR_PARTIAL;
         return WIRE_EABORT;
+    case MSG_NO_SEND:
+        /* Sent instead of the reply to a request: the file couldn't be
+         * opened. It can arrive in the middle of another file's data, so
+         * it's only counted here; a wait for the next reply is cut short,
+         * since that reply may never come. */
+        if (len != 4)
+            return WIRE_EPROTO;
+        s->no_send_pending++;
+        return s->awaiting_reply ? WIRE_EINTR : WIRE_OK;
     case MSG_LOG:
     case MSG_NOOP:
     case MSG_IO_TIMEOUT:
@@ -327,6 +340,11 @@ static int on_message(void *ctx, int tag, const uint8_t *payload, size_t len)
     default:
         return WIRE_EPROTO;
     }
+}
+
+static int flush_mux_hook(void *ctx)
+{
+    return mux_flush(ctx);
 }
 
 static int session_flush(ars_session *s)
@@ -385,12 +403,29 @@ int session_setup_protocol(ars_session *s, const ars_options *o)
     }
     mux_writer(&s->out, &s->mux);
     s->multiplexing = 1;
+    /* Anything we've queued must go out before we wait for an answer. */
+    s->conn.before_wait = flush_mux_hook;
+    s->conn.before_wait_ctx = &s->mux;
 
     /* Our (empty) filter list goes first. */
     w_int32(&s->out, 0);
     if (session_flush(s) != WIRE_OK)
         return session_stream_failure(s, "failed to send filter list");
     return RERR_OK;
+}
+
+int session_wait_reply(ars_session *s)
+{
+    int rc;
+
+    if (s->in.err)
+        return s->in.err;
+    s->awaiting_reply = 1;
+    rc = demux_fill(&s->demux);
+    s->awaiting_reply = 0;
+    if (rc != WIRE_OK && rc != WIRE_EINTR)
+        s->in.err = rc;
+    return rc;
 }
 
 int session_stream_failure(ars_session *s, const char *what)

@@ -67,6 +67,7 @@ static void test_options(void)
     char *argv5[] = { "arsync", "a", "b", "c", NULL };
     char *argv6[] = { "arsync", "--verbose=2", NULL };
     char *argv7[] = { "arsync", "-", NULL };
+    char *argv8[] = { "arsync", "-an", "--times", NULL };
     char err[128];
     ars_options o;
 
@@ -87,6 +88,9 @@ static void test_options(void)
     /* A lone "-" is an argument, as in rsync. */
     CHECK_EQ(options_parse(&o, 2, argv7, err, sizeof err), 0);
     CHECK_EQ(o.nargs, 1);
+    /* -a means -rt for arsync (the rest of rsync's -a isn't supported). */
+    CHECK_EQ(options_parse(&o, 3, argv8, err, sizeof err), 0);
+    CHECK(o.recursive && o.times && o.dry_run);
 }
 
 static void test_greeting(void)

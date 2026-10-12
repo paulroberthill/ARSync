@@ -315,7 +315,24 @@ M1–M3 can be tested on the Amiga early, since they need very little filesystem
 - **No incremental recursion:** with `-r`, rsync's own client prints `receiving incremental
   file list`. arsync always gets the whole list first and prints `receiving file list ...
   done`, and its `-v` byte counts match `rsync --no-inc-recursive`.
+- **`-a` means `-rt`:** the rest of rsync's `-a` (`-lpgoD`: links, permissions, owner, group,
+  devices) isn't supported.
+- **Temp files:** rsync names them `.NAME.XXXXXX` next to the target; arsync does the same
+  but shortens NAME so the whole name fits FFS's 30-character limit.
 - **Protocol 30/31 servers without varint file-list flags** (rsync 3.0.x–3.1.x) skip
   checksum negotiation and use md5. The file-list decoder (M3) must also handle their
   older flag encoding.
+
+## 12. Implementation notes (M4)
+
+- **One reply per request:** each request we send (a transfer, or a changed item such as a
+  new directory) gets exactly one reply in index order, or a `MSG_NO_SEND` when the server
+  can't open the file. `MSG_NO_SEND` can arrive in the middle of another file's data, so it
+  is only counted when it arrives. Only a wait for the *start* of the next reply is cut
+  short by it.
+- **Flush before every wait:** the connection calls a hook that flushes the multiplexer
+  before waiting for input. Without it, requests buffered in a not-yet-full frame were
+  never sent and the pull hung (found in testing).
+- **Whole-file only so far:** requests carry an empty checksum header, so the server sends
+  every file as literal data. Delta transfer is M5.
 

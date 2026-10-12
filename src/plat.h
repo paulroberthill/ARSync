@@ -84,6 +84,12 @@ int plat_mkdir(const char *path);                      /* PLAT_EEXIST if present
 int plat_remove(const char *path);                     /* file or empty dir */
 int plat_rename(const char *from, const char *to);     /* replaces `to` */
 int plat_set_mtime(const char *path, int64_t mtime, long nsec);
+/* Gives a freshly written file the permissions it should end up with, the
+ * way rsync does without -p: those of the file it replaces if there is
+ * one (existing != NULL), otherwise the sender's mode limited by the umask.
+ * AmigaOS keeps an existing file's protection bits and otherwise leaves
+ * the defaults. */
+int plat_new_file_perms(const char *path, uint32_t wire_mode, const char *existing);
 
 typedef struct plat_dir plat_dir;
 

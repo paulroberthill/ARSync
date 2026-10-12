@@ -427,6 +427,24 @@ int plat_set_mtime(const char *path, int64_t mtime, long nsec)
     return SetFileDate((CONST_STRPTR)path, &ds) ? PLAT_OK : map_ioerr(IoErr());
 }
 
+int plat_new_file_perms(const char *path, uint32_t wire_mode, const char *existing)
+{
+    struct FileInfoBlock *fib;
+    BPTR lock;
+    int rc = PLAT_OK;
+
+    (void)wire_mode;
+    if (!existing || !(lock = Lock((CONST_STRPTR)existing, SHARED_LOCK)))
+        return PLAT_OK;
+    if ((fib = AllocDosObject(DOS_FIB, NULL)) != NULL) {
+        if (Examine(lock, fib) && !SetProtection((CONST_STRPTR)path, fib->fib_Protection))
+            rc = map_ioerr(IoErr());
+        FreeDosObject(DOS_FIB, fib);
+    }
+    UnLock(lock);
+    return rc;
+}
+
 int plat_opendir(const char *path, plat_dir **out)
 {
     plat_dir *d;

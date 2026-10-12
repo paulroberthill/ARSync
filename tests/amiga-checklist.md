@@ -64,3 +64,21 @@ in each side's local time zone).
 | 4 | `arsync rsync://127.0.0.1:8730/test/nope` | Server's `link_stat … No such file or directory`, then `arsync error: … (code 23)`, `$RC` 23 |
 | 5 | Same as 1 with the Amiga clock/time zone set to something other than GMT (Prefs/Locale) | Times shift by exactly that zone's offset compared with the Linux side in UTC (`TZ=UTC rsync …`). If they're off by **twice** the offset, the `loc_GMTOffset` sign assumption (DESIGN §10) is wrong |
 | 6 | A large module (e.g. point the daemon at `/usr/share`) with `-r`, output redirected to `RAM:list` | Completes; note the time and free memory (`avail`) before and after |
+
+## M4 – pulling files (whole-file transfers)
+
+Use a destination on a real volume as well as `RAM:` (e.g. `Work:t/`), since FFS/PFS/SFS
+behave differently. Compare results with `rsync -rt` of the same module on Linux.
+
+| # | Command | Expect |
+|---|---------|--------|
+| 1 | `arsync -rtv rsync://127.0.0.1:8730/test/ RAM:t1` | `created directory RAM:t1`, then `./`, `hello.txt`, `sub/`, `sub/random.bin`, summary; `$RC` 0. `type RAM:t1/hello.txt` shows the text; `list RAM:t1/sub` shows `random.bin` 100000 bytes |
+| 2 | `list RAM:t1 LFORMAT "%N %D %T"` | Dates/times match the Linux side's `ls -l --time-style=full-iso` for the daemon's files, **in local time** (see M3 #5 about the time zone) |
+| 3 | Run 1 again | Only the summary (nothing re-sent); `received` bytes small |
+| 4 | `echo changed >RAM:t1/hello.txt` then run 1 again | `hello.txt` re-sent; contents restored |
+| 5 | `arsync -rv rsync://127.0.0.1:8730/test/ RAM:t2` (no `-t`) then repeat | Files get the current date; the repeat re-sends them (rsync's behaviour without `-t`) |
+| 6 | `arsync -rtnv rsync://127.0.0.1:8730/test/ RAM:t3` | Lists what would be copied, `(DRY RUN)` in the summary; `RAM:t3` not created |
+| 7 | `arsync -t rsync://127.0.0.1:8730/test/sub/random.bin RAM:single` | `RAM:single` is a 100000-byte file |
+| 8 | Same as 1 into `Work:` (a real disk), then `list Work:t1 ALL` | No leftover temp files (names starting with `.` and ending in 6 digits) |
+| 9 | Start a large pull (e.g. point the daemon at a big directory) and press **Ctrl-C** mid-file | Stops promptly, `$RC` 20, no temp file left in the destination |
+| 10 | Protection bits: `protect RAM:t1/hello.txt +s` then `echo x >RAM:t1/hello.txt` and run 1 again | `hello.txt` updated and still has the `s` bit (existing protection bits are kept) |
