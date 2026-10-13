@@ -57,7 +57,8 @@ static int add(ars_flist *fl, const char *name, const plat_fileinfo *st, uint32_
 }
 
 /* Appends the contents of directory entry ndx. */
-static int scan_dir(ars_flist *fl, size_t ndx, const char *base, int *io_error)
+static int scan_dir(ars_flist *fl, size_t ndx, const ars_filters *filters, const char *base,
+                    int *io_error)
 {
     char path[FLIST_MAXPATH], child[FLIST_MAXPATH], name[256];
     const char *dirname;
@@ -84,6 +85,8 @@ static int scan_dir(ars_flist *fl, size_t ndx, const char *base, int *io_error)
         }
         /* Symlinks go in the list, as rsync's sender does without -l; the
          * receiver reports and skips them. Devices and the like don't. */
+        if (filters_excluded(filters, child, st.type == PLAT_T_DIR))
+            continue;
         if (st.type == PLAT_T_OTHER) {
             printf("skipping non-regular file \"%s\"\n", child);
             continue;
@@ -101,7 +104,7 @@ static int scan_dir(ars_flist *fl, size_t ndx, const char *base, int *io_error)
     return WIRE_OK;
 }
 
-int scan_source(ars_flist *fl, const char *src, int recursive,
+int scan_source(ars_flist *fl, const char *src, int recursive, const ars_filters *filters,
                 char *base, size_t basesize, int *io_error)
 {
     char path[FLIST_MAXPATH];
@@ -144,6 +147,8 @@ int scan_source(ars_flist *fl, const char *src, int recursive,
         }
     }
 
+    if (strcmp(name, ".") != 0 && filters_excluded(filters, name, st.type == PLAT_T_DIR))
+        return WIRE_OK;
     if (st.type == PLAT_T_DIR && !recursive) {
         printf("skipping directory %s\n", name);
         return WIRE_OK;
@@ -156,7 +161,7 @@ int scan_source(ars_flist *fl, const char *src, int recursive,
         return rc;
 
     for (i = 0; i < fl->count; i++) {
-        if (WIRE_ISDIR(fl->files[i].mode) && (rc = scan_dir(fl, i, base, io_error)) != WIRE_OK)
+        if (WIRE_ISDIR(fl->files[i].mode) && (rc = scan_dir(fl, i, filters, base, io_error)) != WIRE_OK)
             return rc;
         if (plat_break_pending())
             break;

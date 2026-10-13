@@ -125,10 +125,9 @@ static int read_tokens(pull_state *p, const ars_sum_head *sh, plat_file *f,
                        ars_digest *sum, int64_t *written)
 {
     ars_reader *in = &p->s->in;
-    const uint8_t *block;
+    const uint8_t *data;
     int32_t n, len;
-    size_t chunk;
-    int write_failed = 0, rc;
+    int write_failed = 0, err, rc;
 
     *written = 0;
     for (;;) {
@@ -136,8 +135,16 @@ static int read_tokens(pull_state *p, const ars_sum_head *sh, plat_file *f,
             return rc;
         if (p->o->progress)
             progress_update(&p->progress, *written);
-        n = r_int32(in);
-        if (in->err)
+        n = token_recv(&p->tok, in, &data, &err);
+        if (err == WIRE_EPROTO && !in->err) {
+            fprintf(stderr, "arsync: error in compressed file data\n");
+            return RERR_STREAMIO;
+        }
+        if (err == WIRE_ENOMEM) {
+            fprintf(stderr, "arsync: out of memory\n");
+            return RERR_MALLOC;
+        }
+        if (err)
             return stream_failure(p, "receiving file data");
         if (n == 0)
             break;
@@ -148,26 +155,23 @@ static int read_tokens(pull_state *p, const ars_sum_head *sh, plat_file *f,
                 return RERR_PROTOCOL;
             }
             len = n == sh->count - 1 && sh->remainder ? sh->remainder : sh->blength;
-            block = basis_get(p, (int64_t)n * sh->blength, (size_t)len);
-            if (block) {
-                digest_update(sum, block, (size_t)len);
-                if (f && !write_failed && plat_write(f, block, (size_t)len) != PLAT_OK)
+            data = basis_get(p, (int64_t)n * sh->blength, (size_t)len);
+            if (data) {
+                if (token_see(&p->tok, data, len) != WIRE_OK) {
+                    fprintf(stderr, "arsync: error in compressed file data\n");
+                    return RERR_STREAMIO;
+                }
+                digest_update(sum, data, (size_t)len);
+                if (f && !write_failed && plat_write(f, data, (size_t)len) != PLAT_OK)
                     write_failed = 1;
             }
             *written += len;
             continue;
         }
-        while (n > 0) {
-            chunk = n > CHUNK_SIZE ? CHUNK_SIZE : (size_t)n;
-            r_bytes(in, p->buf, chunk);
-            if (in->err)
-                return stream_failure(p, "receiving file data");
-            digest_update(sum, p->buf, chunk);
-            if (f && !write_failed && plat_write(f, p->buf, chunk) != PLAT_OK)
-                write_failed = 1;
-            *written += (int64_t)chunk;
-            n -= (int32_t)chunk;
-        }
+        digest_update(sum, data, (size_t)n);
+        if (f && !write_failed && plat_write(f, data, (size_t)n) != PLAT_OK)
+            write_failed = 1;
+        *written += n;
     }
     return write_failed ? -1 : RERR_OK;
 }

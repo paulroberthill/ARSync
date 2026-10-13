@@ -14,6 +14,8 @@
  * server arguments. */
 #define ARS_AUTH_DIGESTS "md5 md4"
 #define ARS_CHECKSUMS "md5 md4"
+/* Compression methods offered with -z, best first. */
+#define ARS_COMPRESSIONS "zlibx zlib"
 
 /* Capability letters sent to the server in "-e.<letters>":
  *   f  safe file list (I/O-error end marker)
@@ -51,6 +53,8 @@ typedef struct ars_session {
     int32_t compat_flags;
     int checksum_type;          /* DIGEST_* for block and file checksums */
     int32_t checksum_seed;
+    int compression;            /* CPRES_*, for file data */
+    int verbose;                /* for messages the server sends */
 
     /* Multiplexed streams, valid once multiplexing has started. */
     ars_demux demux;
@@ -90,8 +94,9 @@ int session_list_modules(ars_session *s, const ars_options *o);
 /* Asks for rem's module, authenticates if required, and sends args. */
 int session_request(ars_session *s, const ars_remote *rem, const ars_options *o,
                     const char **args, int nargs);
-/* Reads compat flags, negotiates checksums, reads the seed, and starts
- * multiplexing in both directions; when pulling, sends the filter list. */
+/* Reads compat flags, negotiates checksums (and compression), reads the
+ * seed, starts multiplexing in both directions, and sends the filter list
+ * if the server wants one. */
 int session_setup_protocol(ars_session *s, const ars_options *o, int push);
 /* Waits for the next reply to start, handling messages in front of it.
  * Returns WIRE_OK, WIRE_EINTR if a MSG_NO_SEND arrived (one reply fewer is

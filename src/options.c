@@ -37,7 +37,59 @@ static int *numeric_option(ars_options *o, const char *name, int *max)
         *max = 1024;
         return &o->max_name;
     }
+    if (strcmp(name, "compress-level") == 0) {
+        *max = 9;
+        return &o->compress_level;
+    }
     return NULL;
+}
+
+/* Long options that take a string value. Returns 0 if handled, -1 on an
+ * error, 1 if name isn't one of them. */
+static int string_option(ars_options *o, const char *name, const char *val,
+                         char *err, size_t errlen)
+{
+    if (strcmp(name, "password-file") == 0) {
+        o->password_file = val;
+        return 0;
+    }
+    if (strcmp(name, "exclude") == 0)
+        return filters_add(&o->filters, val, FILTER_ADD_EXCLUDE, err, errlen);
+    if (strcmp(name, "include") == 0)
+        return filters_add(&o->filters, val, FILTER_ADD_INCLUDE, err, errlen);
+    if (strcmp(name, "filter") == 0)
+        return filters_add(&o->filters, val, FILTER_ADD_RULE, err, errlen);
+    if (strcmp(name, "exclude-from") == 0)
+        return filters_add_file(&o->filters, val, FILTER_ADD_EXCLUDE, err, errlen);
+    if (strcmp(name, "include-from") == 0)
+        return filters_add_file(&o->filters, val, FILTER_ADD_INCLUDE, err, errlen);
+    if (strcmp(name, "compress-choice") == 0 || strcmp(name, "zc") == 0) {
+        if (strcmp(val, "zlib") == 0)
+            o->compress_choice = CPRES_ZLIB;
+        else if (strcmp(val, "zlibx") == 0)
+            o->compress_choice = CPRES_ZLIBX;
+        else {
+            snprintf(err, errlen, "unsupported compress choice: %s (arsync has zlib and zlibx)", val);
+            return -1;
+        }
+        o->compress = 1;
+        return 0;
+    }
+    return 1;
+}
+
+static int takes_string(const char *name)
+{
+    static const char *const names[] = {
+        "password-file", "exclude", "include", "filter", "exclude-from",
+        "include-from", "compress-choice", "zc",
+    };
+    size_t i;
+
+    for (i = 0; i < sizeof names / sizeof names[0]; i++)
+        if (strcmp(name, names[i]) == 0)
+            return 1;
+    return 0;
 }
 
 static int parse_long(ars_options *o, const char *opt, int argc, char **argv, int *i,
@@ -56,7 +108,7 @@ static int parse_long(ars_options *o, const char *opt, int argc, char **argv, in
     name[len] = '\0';
 
     target = numeric_option(o, name, &max);
-    if (target || strcmp(name, "password-file") == 0) {
+    if (target || takes_string(name)) {
         if (eq) {
             val = eq + 1;
         } else if (*i + 1 < argc) {
@@ -65,10 +117,8 @@ static int parse_long(ars_options *o, const char *opt, int argc, char **argv, in
             snprintf(err, errlen, "option --%s needs a value", name);
             return -1;
         }
-        if (!target) {
-            o->password_file = val;
-            return 0;
-        }
+        if (!target)
+            return string_option(o, name, val, err, errlen) < 0 ? -1 : 0;
         if (parse_uint(val, max, target) < 0) {
             snprintf(err, errlen, "invalid value for --%s: %s", name, val);
             return -1;
@@ -100,6 +150,12 @@ static int parse_long(ars_options *o, const char *opt, int argc, char **argv, in
         o->recursive = o->times = 1;
     else if (strcmp(name, "no-motd") == 0)
         o->no_motd = 1;
+    else if (strcmp(name, "delete") == 0)
+        o->delete_mode = 1;
+    else if (strcmp(name, "delete-excluded") == 0)
+        o->delete_mode = o->delete_excluded = 1;
+    else if (strcmp(name, "compress") == 0)
+        o->compress = 1;
     else if (strcmp(name, "help") == 0)
         o->show_help = 1;
     else if (strcmp(name, "version") == 0)
@@ -139,6 +195,9 @@ static int parse_short(ars_options *o, const char *opts, char *err, size_t errle
             /* rsync's -a is -rlptgoD; of those arsync supports -r and -t. */
             o->recursive = o->times = 1;
             break;
+        case 'z':
+            o->compress = 1;
+            break;
         case 'h':
             o->show_help = 1;
             break;
@@ -156,7 +215,9 @@ int options_parse(ars_options *o, int argc, char **argv, char *err, size_t errle
     const char *a;
 
     memset(o, 0, sizeof *o);
+    filters_init(&o->filters);
     o->max_name = -1;
+    o->compress_level = -1;
     for (i = 1; i < argc; i++) {
         a = argv[i];
         if (!only_args && a[0] == '-' && a[1] != '\0') {
@@ -178,5 +239,14 @@ int options_parse(ars_options *o, int argc, char **argv, char *err, size_t errle
         }
         o->args[o->nargs++] = a;
     }
+    if (o->delete_mode && !o->recursive) {
+        snprintf(err, errlen, "--delete does not work without --recursive (-r)");
+        return -1;
+    }
     return 0;
+}
+
+void options_free(ars_options *o)
+{
+    filters_free(&o->filters);
 }

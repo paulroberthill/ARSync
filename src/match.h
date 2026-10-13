@@ -5,6 +5,7 @@
 
 #include "checksum.h"
 #include "plat.h"
+#include "token.h"
 #include "wire.h"
 
 typedef struct ars_sums {
@@ -26,6 +27,7 @@ typedef struct ars_match_ctx {
     int32_t seed;
     int seed_first;
     uint8_t *buf;           /* MATCH_BUFSIZE bytes */
+    ars_token_tx *tx;       /* how tokens are sent (plain or compressed) */
     void (*progress)(void *ctx, int64_t done);
     void *progress_ctx;
     int64_t literal;        /* statistics: bytes sent as data */
@@ -36,8 +38,9 @@ typedef struct ars_match_ctx {
 #define MATCH_BUFSIZE (CHUNK_BUFSIZE + 2 * 131072)
 #define CHUNK_BUFSIZE 32768
 
-/* Sends file f as tokens (ending with 0) followed by its whole-file
- * checksum. Returns WIRE_OK, a stream error, or WIRE_EABORT on Ctrl-C. */
+/* Sends file f as tokens (through m->tx) followed by its whole-file
+ * checksum. Returns WIRE_OK, a stream error, WIRE_EPROTO if compression
+ * failed, or WIRE_EABORT on Ctrl-C. */
 int send_delta(ars_match_ctx *m, plat_file *f, const ars_sums *s, ars_writer *w);
 
 #endif

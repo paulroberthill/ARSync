@@ -32,6 +32,7 @@ extern int test_failures;
 #define CHECK_MEM(a, b, n) CHECK(memcmp((a), (b), (n)) == 0)
 
 void test_wire(void);
+void test_filter_suite(void);
 void test_amitime(void);
 void test_plat(void);
 void test_session(void);

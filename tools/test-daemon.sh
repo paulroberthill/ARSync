@@ -23,6 +23,7 @@ mkdir -p "$WORK/test/sub" "$WORK/upload"
 
 echo "hello from the rsync daemon" > "$WORK/test/hello.txt"
 head -c 100000 /dev/urandom > "$WORK/test/sub/random.bin"
+seq 1 40000 > "$WORK/test/sub/numbers.txt"     # compresses well, for -z
 cat > "$WORK/motd" <<'EOF'
 arsync test daemon - message of the day
 EOF

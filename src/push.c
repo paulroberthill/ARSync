@@ -39,7 +39,33 @@ typedef struct push_state {
     long xfr_count;
     ars_progress progress;
     ars_match_ctx match;
+    ars_token_tx tx;
 } push_state;
+
+/* With -z, files that are already compressed are sent at level 0, as
+ * rsync's --skip-compress default does (plus Amiga archive types). */
+static int skip_compress(const char *name)
+{
+    static const char *const suffixes[] = {
+        "7z", "avi", "bz2", "deb", "dms", "flac", "gif", "gz", "jpeg", "jpg", "lha",
+        "lz", "lz4", "lzh", "lzma", "lzo", "lzx", "mkv", "mov", "mp3", "mp4", "mpeg",
+        "mpg", "ogg", "png", "rar", "rpm", "tbz", "tgz", "txz", "webm", "webp", "xz",
+        "z", "zip", "zst",
+    };
+    const char *dot = strrchr(name, '.'), *suf;
+    size_t i, j;
+
+    if (!dot || strchr(dot, '/'))
+        return 0;
+    for (i = 0; i < sizeof suffixes / sizeof suffixes[0]; i++) {
+        suf = suffixes[i];
+        for (j = 0; suf[j] && dot[1 + j] && (dot[1 + j] | 0x20) == suf[j]; j++)
+            ;
+        if (!suf[j] && !dot[1 + j])
+            return 1;
+    }
+    return 0;
+}
 
 static int flush(push_state *p)
 {
@@ -169,6 +195,7 @@ static int handle_request(push_state *p, int *done)
         progress_start(&p->progress, f->size);
     }
     p->match.read_error = 0;
+    token_tx_level(&p->tx, skip_compress(flist_name(&p->fl, f)) ? 0 : p->o->compress_level);
     rc = send_delta(&p->match, fh, &sums, &p->s->out);
     plat_close(fh);
     sums_free(&sums);
@@ -176,6 +203,10 @@ static int handle_request(push_state *p, int *done)
         fflush(stdout);
         fprintf(stderr, "\narsync: interrupted by user\n");
         return RERR_SIGNAL;
+    }
+    if (rc == WIRE_EPROTO) {
+        fprintf(stderr, "arsync: compression failed sending \"%s\"\n", local);
+        return RERR_STREAMIO;
     }
     if (rc != WIRE_OK)
         return session_stream_failure(p->s, "sending file data");
@@ -284,7 +315,10 @@ int client_push(ars_session *s, const ars_options *o, const char *src)
     p.match.seed_first = (s->compat_flags & CF_CHKSUM_SEED_FIX) != 0;
     p.match.progress = o->progress ? show_progress : NULL;
     p.match.progress_ctx = &p;
-    if (!(p.match.buf = malloc(MATCH_BUFSIZE))) {
+    p.match.tx = &p.tx;
+    if (!(p.match.buf = malloc(MATCH_BUFSIZE)) || token_tx_init(&p.tx, s->compression) != WIRE_OK) {
+        free(p.match.buf);
+        token_tx_free(&p.tx);
         fprintf(stderr, "arsync: out of memory\n");
         return RERR_MALLOC;
     }
@@ -292,7 +326,7 @@ int client_push(ars_session *s, const ars_options *o, const char *src)
     show_flist = (o->verbose || o->progress) && o->recursive;
     if (show_flist)
         printf("building file list ... ");
-    if (scan_source(&p.fl, src, o->recursive, p.base, sizeof p.base, &p.io_error) != WIRE_OK) {
+    if (scan_source(&p.fl, src, o->recursive, &o->filters, p.base, sizeof p.base, &p.io_error) != WIRE_OK) {
         fprintf(stderr, "arsync: out of memory building file list\n");
         rc = RERR_MALLOC;
         goto out;
@@ -341,6 +375,7 @@ int client_push(ars_session *s, const ars_options *o, const char *src)
 
 out:
     free(p.match.buf);
+    token_tx_free(&p.tx);
     flist_free(&p.fl);
     return rc;
 }

@@ -132,6 +132,9 @@ static void gen_dir(pull_state *p, size_t ndx, const char *local)
 
     if ((iflags & ITEM_SIGNIFICANT) || p->o->verbose > 1)
         write_item(p, (int32_t)ndx, iflags);
+    /* A directory that was already there may hold things to delete. */
+    if (exists && p->o->delete_mode && !(f->xflags & XMIT_NO_CONTENT_DIR))
+        delete_in_dir(p, ndx, local);
     return;
 
 skip_contents:
@@ -150,6 +153,13 @@ static void gen_file(pull_state *p, size_t ndx, const char *local)
     if (rc == PLAT_OK && st.type == PLAT_T_DIR) {
         /* Like rsync without --force: an empty directory makes way. */
         if (p->o->dry_run) {
+            rc = PLAT_ENOENT;
+        } else if (p->o->delete_mode && !p->dest_is_file) {
+            /* With --delete, contents and all. */
+            if (delete_for_file(p, ndx, local) != PLAT_OK) {
+                pull_file_error(p, "arsync: could not make way for new regular file: %s", local);
+                return;
+            }
             rc = PLAT_ENOENT;
         } else if ((rc = plat_remove(local)) != PLAT_OK) {
             printf("cannot delete non-empty directory: %s\n", flist_name(&p->fl, f));

@@ -402,3 +402,33 @@ M1–M3 can be tested on the Amiga early, since they need very little filesystem
 - **Byte counts** in the `-v` summary are counted from the end of the login exchange,
   which is how rsync counts them.
 
+## 16. Filters, `--delete` and `-z` (M8, release 0.3.0)
+
+- **Filters (`filter.c`):** `--exclude`/`--include`/`--filter` and the `-from` variants
+  build one ordered rule list; the first match wins. Matching follows rsync's rules
+  (`*`/`?`/`[...]` within a name, `**` across `/`, patterns with a `/` matched against the
+  path's last components, a leading `/` anchoring at the transfer root, a trailing `/` for
+  directories only, `dir/***` for a directory and its contents). The matcher was checked
+  against rsync on 56 rule sets. When pulling, the rules go to the server, which applies
+  them to its list; when pushing, the scanner applies them, and they go to the server only
+  with `--delete` (so it knows what not to delete; with `--delete-excluded`, an empty list).
+- **`--delete` when pulling (`delete.c`):** as rsync's `--delete-during`: each directory
+  is cleaned up when the generator reaches it, in reverse rsync order. Excluded names are
+  kept (unless `--delete-excluded`), even inside a directory being deleted, which then
+  stays. Nothing is deleted if either side reported an I/O error building the list. Name
+  lookups fold case on case-insensitive volumes, so `README` doesn't delete `Readme`.
+- **`--delete` when pushing:** the server deletes; arsync only relays its `deleting`
+  lines.
+- **`-z` (`token.c`):** both of rsync's methods. `zlibx` is plain deflate of the literal
+  data; `zlib` also feeds matched blocks into the compressor's history (and, receiving,
+  into the decompressor's via `inflate()` on a stored block), so both ends must keep
+  identical windows. Tokens are packed into flag bytes (runs of consecutive block numbers
+  in one token). The method is negotiated with protocol-31+ servers (`zlibx` preferred, as
+  rsync does), or set with `--zc`; older servers get `zlib`. When pushing, already-packed
+  files are deflated at level 0 (rsync's `--skip-compress` list plus `lha`, `lzx`, `dms`).
+- **zlib on the Amiga is built from source (`third_party/zlib`, 1.3.1).** GCC 6.5 at `-O2`
+  miscompiles zlib's `trees.c`: deflate output gets a stray byte at the end of each flush,
+  and zlib's own `test/example.c` fails under vamos ("inflate error: -3"). The toolchain's
+  prebuilt `libz.a` has the same fault. Building `trees.c` at `-O1` (the rest at `-O2`)
+  fixes it; `-O1` and `-O0` builds pass zlib's self-test. The archive is linked by path
+  because the compiler driver puts `-L/opt/amiga/lib` ahead of any user `-L`.

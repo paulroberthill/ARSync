@@ -4,11 +4,8 @@
  * checksums). We slide a window of one block's length over our file,
  * keeping the weak "rolling" checksum up to date one byte at a time; when
  * it matches a block's, the strong checksum decides. A match is sent as a
- * block reference, everything between matches as literal data:
- *
- *   int32 n > 0 then n bytes   literal data (at most 32 KiB per token)
- *   int32 -(i + 1)             copy block i of the receiver's file
- *   int32 0                    end, then the whole-file checksum
+ * block reference, everything between matches as literal data (see
+ * token.c for how they're encoded), then the whole-file checksum.
  */
 #include <stdlib.h>
 #include <string.h>
@@ -116,20 +113,16 @@ static void fill(ars_match_ctx *m, window *wd, int64_t from, int64_t to)
     }
 }
 
-static void send_literal(ars_match_ctx *m, ars_writer *w, ars_digest *sum,
-                         const uint8_t *p, size_t n)
+/* Sends the literal data [lit, lit + n) and then a token (see token.h);
+ * block is the matched block's data, for compression. */
+static int send_piece(ars_match_ctx *m, ars_writer *w, ars_digest *sum, int32_t token,
+                      const uint8_t *lit, size_t n, const uint8_t *block, size_t blen)
 {
-    size_t chunk;
-
-    digest_update(sum, p, n);
-    m->literal += (int64_t)n;
-    while (n > 0) {
-        chunk = n > CHUNK_BUFSIZE ? CHUNK_BUFSIZE : n;
-        w_int32(w, (int32_t)chunk);
-        w_bytes(w, p, chunk);
-        p += chunk;
-        n -= chunk;
+    if (n > 0) {
+        digest_update(sum, lit, n);
+        m->literal += (int64_t)n;
     }
+    return token_send(m->tx, w, token, lit, n, block, blen);
 }
 
 /* Index of a block of length n whose checksums match data, or -1. */
@@ -165,7 +158,7 @@ int send_delta(ars_match_ctx *m, plat_file *f, const ars_sums *s, ars_writer *w)
     int64_t end;
     uint32_t s1 = 0, s2 = 0, weak;
     int32_t n = 0, blk, i;
-    int fresh = 1;
+    int fresh = 1, rc;
     uint8_t *p;
 
     memset(&wd, 0, sizeof wd);
@@ -180,7 +173,9 @@ int send_delta(ars_match_ctx *m, plat_file *f, const ars_sums *s, ars_writer *w)
          * the buffer. */
         if (pos - lit >= CHUNK_BUFSIZE) {
             fill(m, &wd, lit, pos);
-            send_literal(m, w, &sum, m->buf + (lit - wd.off), (size_t)(pos - lit));
+            if ((rc = send_piece(m, w, &sum, -2, m->buf + (lit - wd.off), (size_t)(pos - lit),
+                                 NULL, 0)) != WIRE_OK)
+                return rc;
             lit = pos;
             if (m->progress)
                 m->progress(m->progress_ctx, pos);
@@ -213,9 +208,9 @@ int send_delta(ars_match_ctx *m, plat_file *f, const ars_sums *s, ars_writer *w)
         weak = (s1 & 0xFFFF) + (s2 << 16);
         blk = s->head[hash_of(s, weak)] < 0 ? -1 : find_block(m, s, weak, p, n);
         if (blk >= 0) {
-            if (pos > lit)
-                send_literal(m, w, &sum, m->buf + (lit - wd.off), (size_t)(pos - lit));
-            w_int32(w, -(blk + 1));
+            if ((rc = send_piece(m, w, &sum, blk, m->buf + (lit - wd.off), (size_t)(pos - lit),
+                                 p, (size_t)n)) != WIRE_OK)
+                return rc;
             digest_update(&sum, p, (size_t)n);
             m->matched += n;
             pos += n;
@@ -239,9 +234,9 @@ int send_delta(ars_match_ctx *m, plat_file *f, const ars_sums *s, ars_writer *w)
     }
 
     fill(m, &wd, lit, pos);
-    if (pos > lit)
-        send_literal(m, w, &sum, m->buf + (lit - wd.off), (size_t)(pos - lit));
-    w_int32(w, 0);
+    if ((rc = send_piece(m, w, &sum, -1, m->buf + (lit - wd.off), (size_t)(pos - lit),
+                         NULL, 0)) != WIRE_OK)
+        return rc;
     digest_final(&sum, file_sum);
     w_bytes(w, file_sum, SUM_LENGTH);
     if (m->progress)

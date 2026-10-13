@@ -124,3 +124,21 @@ prints.
 | 6 | A directory containing a soft link (`makelink … soft`) | The link is reported as `skipping non-regular file` (by the server); everything else copied |
 | 7 | Push a large tree and press **Ctrl-C** while files are being sent | Stops promptly, `$RC` 20 |
 | 8 | Timing: push a large file that changed a little (like M5 #4), with and without `-W` | Report both times; this is the first test of the matcher's speed on a 68k |
+
+## M8 – excludes, `--delete`, `-z` (release 0.3.0)
+
+Restart `tools/test-daemon.sh` (the `test` module now also has `sub/numbers.txt`, about
+230 KB of text that compresses well).
+
+| # | Command | Expect |
+|---|---------|--------|
+| 1 | `arsync -rtvz rsync://127.0.0.1:8730/test/ RAM:z1` | All files copied; `received` well under the total size (numbers.txt compresses about 4:1; random.bin doesn't). Files identical to the Linux copies |
+| 2 | Same with `--zc=zlib` into `RAM:z2`, then change a few bytes in the middle of `RAM:z2/sub/numbers.txt`, backdate it (`setdate RAM:z2/sub/numbers.txt 01-Jan-01`) and run again | Second run re-sends numbers.txt as a small delta; file identical to the Linux copy afterwards. This exercises "zlib"'s block-history path on 68k |
+| 3 | `arsync -rtv --exclude=*.bin rsync://127.0.0.1:8730/test/ RAM:x1` | `sub/random.bin` not copied, everything else is |
+| 4 | Copy once into `RAM:d1`; add `RAM:d1/extra` and `RAM:d1/sub/old.info`; run `arsync -rtvn --delete rsync://127.0.0.1:8730/test/ RAM:d1` | Lists `deleting extra` and `deleting sub/old.info`, deletes nothing (dry run) |
+| 5 | Same without `-n`, plus `--exclude=*.info` | `extra` deleted, `sub/old.info` kept |
+| 6 | Same with `--delete-excluded` | `sub/old.info` deleted too |
+| 7 | On an FFS volume: pull `test` into `DH0:d2`, rename `DH0:d2/hello.txt` to `Hello.txt` on the Amiga, then pull again with `-v --delete` | Nothing deleted: names match case-insensitively, so `Hello.txt` counts as the server's `hello.txt` |
+| 8 | `arsync -rtvz Work:SomeDir/ rsync://127.0.0.1:8730/upload/z/` with a few text files and an `.lha` in SomeDir | Arrives intact on Linux (`diff -r`); `sent` well under the total for the text files |
+| 9 | Delete one file from `Work:SomeDir`, run 8 again with `--delete` | `deleting FILE` (printed for the server); gone from the upload directory |
+| 10 | `arsync --version` | `arsync 0.3.0` |

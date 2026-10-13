@@ -185,10 +185,26 @@ int build_server_args(const ars_options *o, const ars_remote *rem, int push,
         buf[pos++] = 't';
     if (o->recursive)
         buf[pos++] = 'r';
+    /* "zlibx" by name has no letter: rsync sends --new-compress alone. */
+    if (o->compress && o->compress_choice != CPRES_ZLIBX)
+        buf[pos++] = 'z';
     pos += (size_t)snprintf(buf + pos, bufsize - pos, "e.%s", ARS_CLIENT_INFO) + 1;
 
     if (o->list_only > 1)
         args[n++] = "--list-only";
+    /* When pulling we do the deleting; a receiving server needs telling. */
+    if (push && o->delete_excluded)
+        args[n++] = "--delete-excluded";
+    else if (push && o->delete_mode)
+        args[n++] = "--delete";
+    if (o->compress && o->compress_choice == CPRES_ZLIB)
+        args[n++] = "--old-compress";
+    else if (o->compress && o->compress_choice == CPRES_ZLIBX)
+        args[n++] = "--new-compress";
+    if (o->compress && o->compress_level >= 0) {
+        args[n++] = buf + pos;
+        pos += (size_t)snprintf(buf + pos, bufsize - pos, "--compress-level=%d", o->compress_level) + 1;
+    }
     args[n++] = ".";
 
     /* A bare module name is sent as "module/", as rsync does. */
@@ -336,11 +352,20 @@ static int on_message(void *ctx, int tag, const uint8_t *payload, size_t len)
             return WIRE_EPROTO;
         s->no_send_pending++;
         return s->awaiting_reply ? WIRE_EINTR : WIRE_OK;
+    case MSG_DELETED:
+        /* A receiving server deleted something (--delete); a trailing NUL
+         * marks a directory. */
+        if (s->verbose && len > 0) {
+            int dir = len > 1 && payload[len - 1] == '\0';
+
+            printf("deleting %.*s%s\n", (int)(dir ? len - 1 : len), (const char *)payload,
+                   dir ? "/" : "");
+        }
+        return WIRE_OK;
     case MSG_LOG:
     case MSG_NOOP:
     case MSG_IO_TIMEOUT:
     case MSG_SUCCESS:       /* only meaningful with options we don't use */
-    case MSG_DELETED:
         return WIRE_OK;
     default:
         return WIRE_EPROTO;
@@ -361,9 +386,32 @@ static int session_flush(ars_session *s)
     return conn_flush(&s->conn);
 }
 
+/* The first method in our list that the server also offers. */
+static int choose_compression(const char *theirs)
+{
+    const char *p = theirs, *end;
+    size_t len;
+    int best = CPRES_NONE;
+
+    while (*p) {
+        while (*p == ' ' || *p == '\t')
+            p++;
+        for (end = p; *end && *end != ' ' && *end != '\t'; end++)
+            ;
+        len = (size_t)(end - p);
+        if (len == 5 && memcmp(p, "zlibx", 5) == 0)
+            best = CPRES_ZLIBX;
+        else if (len == 4 && memcmp(p, "zlib", 4) == 0 && best == CPRES_NONE)
+            best = CPRES_ZLIB;
+        p = end;
+    }
+    return best;
+}
+
 int session_setup_protocol(ars_session *s, const ars_options *o, int push)
 {
     char theirs[256];
+    int negotiate_compression;
     ars_reader *r = &s->conn.r;
     ars_writer *w = &s->conn.w;
 
@@ -378,8 +426,18 @@ int session_setup_protocol(ars_session *s, const ars_options *o, int push)
     /* Servers that understood our 'v' capability negotiate the checksum;
      * older protocol-30/31 ones always use md5. */
     s->checksum_type = DIGEST_MD5;
+    s->verbose = o->verbose;
+    /* Compression: as chosen with --compress-choice, negotiated, or (from
+     * servers too old to negotiate) zlib. */
+    s->compression = !o->compress ? CPRES_NONE
+                     : o->compress_choice ? o->compress_choice : CPRES_ZLIB;
+    negotiate_compression = o->compress && !o->compress_choice
+                            && (s->compat_flags & CF_VARINT_FLIST_FLAGS);
     if (s->compat_flags & CF_VARINT_FLIST_FLAGS) {
+        /* Both lists go out before either answer is read. */
         w_vstring(w, ARS_CHECKSUMS, strlen(ARS_CHECKSUMS));
+        if (negotiate_compression)
+            w_vstring(w, ARS_COMPRESSIONS, strlen(ARS_COMPRESSIONS));
         if (conn_flush(&s->conn) != WIRE_OK)
             return conn_failure(s, "failed to send checksum list");
         if (r_vstring(r, theirs, sizeof theirs) < 0)
@@ -389,6 +447,15 @@ int session_setup_protocol(ars_session *s, const ars_options *o, int push)
                     " (server offers: %s, we support: %s)\n", theirs, ARS_CHECKSUMS);
             return RERR_UNSUPPORTED;
         }
+        if (negotiate_compression) {
+            if (r_vstring(r, theirs, sizeof theirs) < 0)
+                return conn_failure(s, "failed to read compression list");
+            if (!(s->compression = choose_compression(theirs))) {
+                fprintf(stderr, "arsync: failed to negotiate a compression choice"
+                        " (server offers: %s, we support: %s)\n", theirs, ARS_COMPRESSIONS);
+                return RERR_UNSUPPORTED;
+            }
+        }
     }
 
     s->checksum_seed = r_int32(r);
@@ -396,8 +463,10 @@ int session_setup_protocol(ars_session *s, const ars_options *o, int push)
         return conn_failure(s, "failed to read checksum seed");
 
     if (o->verbose > 1)
-        printf("compat flags 0x%lx, checksum %s, seed %ld\n", (long)s->compat_flags,
-               s->checksum_type == DIGEST_MD5 ? "md5" : "md4", (long)s->checksum_seed);
+        printf("compat flags 0x%lx, checksum %s, compression %s, seed %ld\n", (long)s->compat_flags,
+               s->checksum_type == DIGEST_MD5 ? "md5" : "md4",
+               s->compression == CPRES_ZLIBX ? "zlibx" : s->compression == CPRES_ZLIB ? "zlib" : "none",
+               (long)s->checksum_seed);
 
     /* Everything from here on is multiplexed in both directions. */
     demux_init(&s->demux, &s->conn.r, on_message, s);
@@ -412,11 +481,15 @@ int session_setup_protocol(ars_session *s, const ars_options *o, int push)
     s->conn.before_wait = flush_mux_hook;
     s->conn.before_wait_ctx = &s->mux;
 
-    /* A receiving client sends its filter list first (ours is empty); a
-     * sending client sends none, as the server's receiver doesn't want one
-     * unless deleting. */
-    if (!push) {
-        w_int32(&s->out, 0);
+    /* A receiving client sends its filter rules, for the server to apply
+     * when building its list. A sending client applies them itself, and
+     * sends them only when the server will be deleting, so it knows what
+     * to leave alone; with --delete-excluded that's nothing. */
+    if (!push || o->delete_mode) {
+        if (push && o->delete_excluded)
+            w_int32(&s->out, 0);
+        else
+            filters_send(&o->filters, &s->out);
         if (session_flush(s) != WIRE_OK)
             return session_stream_failure(s, "failed to send filter list");
     }

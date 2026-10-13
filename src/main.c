@@ -32,6 +32,16 @@ static void usage(FILE *out)
             "  -n, --dry-run        show what would be transferred\n"
             "  -W, --whole-file     send whole files (no delta transfer)\n"
             "  -P, --progress       show progress during transfer\n"
+            "  -z, --compress       compress file data during the transfer\n"
+            "      --compress-level=N    zlib level 1-9 (default 6)\n"
+            "      --zc=zlib|zlibx  compression method (default: negotiated)\n"
+            "      --delete         delete files that aren't on the sending side\n"
+            "      --delete-excluded     also delete excluded files (implies --delete)\n"
+            "      --exclude=PATTERN     exclude files matching PATTERN\n"
+            "      --include=PATTERN     don't exclude files matching PATTERN\n"
+            "      --exclude-from=FILE   read exclude patterns from FILE\n"
+            "      --include-from=FILE   read include patterns from FILE\n"
+            "      --filter=RULE    add a filter rule (\"- PATTERN\" or \"+ PATTERN\")\n"
             "      --max-name=N     longest file name the destination takes\n"
             "                       (default: detected; 30 on FFS)\n"
             "      --amiga-rules    apply AmigaDOS limits on other systems (testing)\n"
@@ -70,10 +80,9 @@ static int transfer(const ars_remote *rem, const ars_options *opts, int push, co
     return rc;
 }
 
-static int ars_main(int argc, char **argv)
+static int ars_main(int argc, char **argv, ars_options *o)
 {
     char err[256];
-    ars_options opts;
     ars_remote rem, dummy;
     ars_session s;
     int rc;
@@ -81,72 +90,81 @@ static int ars_main(int argc, char **argv)
     /* Keep stdout (MOTD, server messages) in order with stderr errors. */
     setvbuf(stdout, NULL, _IOLBF, BUFSIZ);
 
-    if (options_parse(&opts, argc, argv, err, sizeof err) < 0) {
+    if (options_parse(o, argc, argv, err, sizeof err) < 0) {
         fprintf(stderr, "arsync: %s\n", err);
         fprintf(stderr, "arsync: use --help for usage\n");
         return RERR_SYNTAX;
     }
-    if (opts.show_help) {
+    if (o->show_help) {
         usage(stdout);
         return RERR_OK;
     }
-    if (opts.show_version) {
+    if (o->show_version) {
         printf("arsync %s, protocol version %d\n", ARSYNC_VERSION, ARS_PROTOCOL_VERSION);
         return RERR_OK;
     }
-    if (opts.nargs == 0) {
+    if (o->nargs == 0) {
         usage(stderr);
         return RERR_SYNTAX;
     }
 
-    rc = parse_remote(opts.args[0], &rem, err, sizeof err);
+    rc = parse_remote(o->args[0], &rem, err, sizeof err);
     if (rc < 0) {
         fprintf(stderr, "arsync: %s\n", err);
         return RERR_SYNTAX;
     }
     if (rc == 0) {
         /* A local source: this is a push, to a daemon location. */
-        if (opts.nargs == 2) {
-            rc = parse_remote(opts.args[1], &rem, err, sizeof err);
+        if (o->nargs == 2) {
+            rc = parse_remote(o->args[1], &rem, err, sizeof err);
             if (rc < 0) {
                 fprintf(stderr, "arsync: %s\n", err);
                 return RERR_SYNTAX;
             }
             if (rc == 1) {
-                if (opts.list_only) {
+                if (o->list_only) {
                     fprintf(stderr, "arsync: --list-only only lists remote files\n");
                     return RERR_SYNTAX;
                 }
-                return transfer(&rem, &opts, 1, opts.args[0]);
+                return transfer(&rem, o, 1, o->args[0]);
             }
         }
         fprintf(stderr, "arsync: one of %s must be an rsync daemon location"
                 " (rsync://HOST/MODULE or HOST::MODULE); arsync doesn't copy locally\n",
-                opts.nargs == 2 ? "the arguments" : opts.args[0]);
+                o->nargs == 2 ? "the arguments" : o->args[0]);
         return RERR_SYNTAX;
     }
-    if (opts.nargs == 2 && parse_remote(opts.args[1], &dummy, err, sizeof err) == 1) {
+    if (o->nargs == 2 && parse_remote(o->args[1], &dummy, err, sizeof err) == 1) {
         fprintf(stderr, "arsync: copying between two daemons isn't supported\n");
         return RERR_SYNTAX;
     }
     if (rem.path[0] == '\0') {
-        if (opts.nargs > 1) {
+        if (o->nargs > 1) {
             fprintf(stderr, "arsync: listing modules takes no destination\n");
             return RERR_SYNTAX;
         }
-        if ((rc = session_open(&s, &rem, &opts)) == RERR_OK)
-            rc = session_list_modules(&s, &opts);
+        if ((rc = session_open(&s, &rem, o)) == RERR_OK)
+            rc = session_list_modules(&s, o);
         session_close(&s);
         return rc;
     }
 
     /* Without a destination, rsync lists the source. */
-    if (opts.nargs == 1 && !opts.list_only)
-        opts.list_only = 1;
-    return transfer(&rem, &opts, 0, NULL);
+    if (o->nargs == 1 && !o->list_only)
+        o->list_only = 1;
+    return transfer(&rem, o, 0, NULL);
+}
+
+static int run(int argc, char **argv)
+{
+    ars_options opts;
+    int rc = ars_main(argc, argv, &opts);
+
+    options_free(&opts);
+    return rc;
 }
 
 int main(int argc, char **argv)
 {
-    return plat_run(ars_main, argc, argv);
+    return plat_run(run, argc, argv);
 }

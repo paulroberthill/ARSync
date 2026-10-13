@@ -6,7 +6,9 @@
 #include "digest.h"
 #include "flist.h"
 #include "match.h"
+#include "options.h"
 #include "plat.h"
+#include "token.h"
 
 /* What a sender encodes, a receiver must decode to the same list. */
 static void test_flist_roundtrip(int varint)
@@ -79,21 +81,23 @@ static void put_sums(ars_writer *w, const uint8_t *old, size_t len, int32_t seed
 
 /* Rebuilds the file from tokens as a receiver would; checks the trailing
  * file checksum too. Returns the length, or -1 on a malformed stream. */
-static long apply_tokens(ars_reader *r, const ars_sums *s, const uint8_t *old, size_t oldlen,
-                         uint8_t *out, size_t outsize, long *refs)
+static long apply_tokens(ars_token_rx *rx, ars_reader *r, const ars_sums *s, const uint8_t *old,
+                         size_t oldlen, uint8_t *out, size_t outsize, long *refs)
 {
     uint8_t want[SUM_LENGTH], got[SUM_LENGTH];
+    const uint8_t *data;
     ars_digest d;
     size_t pos = 0, len;
     int32_t t;
+    int err;
 
     *refs = 0;
     digest_init(&d, DIGEST_MD5);
-    while ((t = r_int32(r)) != 0 && !r->err) {
+    while ((t = token_recv(rx, r, &data, &err)) != 0) {
         if (t > 0) {
             if (pos + (size_t)t > outsize)
                 return -1;
-            r_bytes(r, out + pos, (size_t)t);
+            memcpy(out + pos, data, (size_t)t);
             pos += (size_t)t;
         } else {
             t = -(t + 1);
@@ -103,20 +107,30 @@ static long apply_tokens(ars_reader *r, const ars_sums *s, const uint8_t *old, s
             if ((size_t)t * (size_t)s->h.blength + len > oldlen || pos + len > outsize)
                 return -1;
             memcpy(out + pos, old + (size_t)t * (size_t)s->h.blength, len);
+            if (token_see(rx, out + pos, (int32_t)len) != WIRE_OK)
+                return -1;
             pos += len;
             (*refs)++;
         }
     }
+    if (err)
+        return -1;
     r_bytes(r, want, sizeof want);
     digest_update(&d, out, pos);
     digest_final(&d, got);
     return r->err || memcmp(want, got, sizeof want) ? -1 : (long)pos;
 }
 
+static const char *const cpres_names[] = { "plain", "zlib", "zlibx" };
+
+/* Sends new_data as a delta against old[] and rebuilds it, twice in a row
+ * through the same token streams (the second file must start afresh). */
 static void test_delta_case(const char *name, const uint8_t *old, size_t oldlen,
-                            const uint8_t *new_data, size_t newlen, long min_refs)
+                            const uint8_t *new_data, size_t newlen, long min_refs, int cpres)
 {
     ars_match_ctx m;
+    ars_token_tx tx;
+    ars_token_rx rx;
     ars_membuf sums_mb, out_mb;
     ars_reader r;
     ars_writer w;
@@ -124,6 +138,7 @@ static void test_delta_case(const char *name, const uint8_t *old, size_t oldlen,
     plat_file *f;
     uint8_t *rebuilt = malloc(newlen + 1);
     long refs, got;
+    int round;
 
     /* The "local file" the sender reads. */
     CHECK_EQ(plat_open_write("arsync-test.delta", &f), PLAT_OK);
@@ -141,22 +156,33 @@ static void test_delta_case(const char *name, const uint8_t *old, size_t oldlen,
     m.seed = 4242;
     m.seed_first = 1;
     m.buf = malloc(MATCH_BUFSIZE);
+    m.tx = &tx;
+    CHECK_EQ(token_tx_init(&tx, cpres), WIRE_OK);
+    CHECK_EQ(token_rx_init(&rx, cpres), WIRE_OK);
     membuf_init(&out_mb);
     membuf_writer(&w, &out_mb);
-    CHECK_EQ(plat_open_read("arsync-test.delta", &f), PLAT_OK);
-    CHECK_EQ(send_delta(&m, f, &sums, &w), WIRE_OK);
-    plat_close(f);
+    for (round = 0; round < 2; round++) {
+        CHECK_EQ(plat_open_read("arsync-test.delta", &f), PLAT_OK);
+        CHECK_EQ(send_delta(&m, f, &sums, &w), WIRE_OK);
+        plat_close(f);
+    }
 
     membuf_reader(&r, &out_mb);
-    got = apply_tokens(&r, &sums, old, oldlen, rebuilt, newlen + 1, &refs);
-    if (got != (long)newlen || memcmp(rebuilt, new_data, newlen) != 0 || refs < min_refs)
-        printf("  delta case \"%s\": rebuilt %ld of %lu bytes, %ld block refs (want >= %ld)\n",
-               name, got, (unsigned long)newlen, refs, min_refs);
-    CHECK_EQ(got, (long)newlen);
-    CHECK(got == (long)newlen && memcmp(rebuilt, new_data, newlen) == 0);
-    CHECK(refs >= min_refs);
-    CHECK_EQ(m.literal + m.matched, (int64_t)newlen);
+    for (round = 0; round < 2; round++) {
+        got = apply_tokens(&rx, &r, &sums, old, oldlen, rebuilt, newlen + 1, &refs);
+        if (got != (long)newlen || memcmp(rebuilt, new_data, newlen) != 0 || refs < min_refs)
+            printf("  delta case \"%s\" (%s, round %d): rebuilt %ld of %lu bytes,"
+                   " %ld block refs (want >= %ld)\n", name, cpres_names[cpres], round + 1,
+                   got, (unsigned long)newlen, refs, min_refs);
+        CHECK_EQ(got, (long)newlen);
+        CHECK(got == (long)newlen && memcmp(rebuilt, new_data, newlen) == 0);
+        CHECK(refs >= min_refs);
+    }
+    CHECK_EQ(out_mb.pos, out_mb.len);
+    CHECK_EQ(m.literal + m.matched, 2 * (int64_t)newlen);
 
+    token_tx_free(&tx);
+    token_rx_free(&rx);
     sums_free(&sums);
     free(m.buf);
     free(rebuilt);
@@ -165,7 +191,7 @@ static void test_delta_case(const char *name, const uint8_t *old, size_t oldlen,
     plat_remove("arsync-test.delta");
 }
 
-static void test_delta(void)
+static void test_delta(int cpres)
 {
     enum { N = 200000 };
     uint8_t *old = malloc(N + 100), *cur = malloc(N + 100);
@@ -178,22 +204,29 @@ static void test_delta(void)
     }
     /* 700-byte blocks; 286 of them in 200,000 bytes. */
     memcpy(cur, old, N);
-    test_delta_case("identical", old, N, cur, N, 285);
+    test_delta_case("identical", old, N, cur, N, 285, cpres);
     memcpy(cur, old, N);
     memcpy(cur + 100000, "CHANGED!", 8);
-    test_delta_case("changed in the middle", old, N, cur, N, 280);
+    test_delta_case("changed in the middle", old, N, cur, N, 280, cpres);
     memcpy(cur, "inserted", 8);
     memcpy(cur + 8, old, N);
-    test_delta_case("bytes inserted at the start", old, N, cur, N + 8, 280);
-    test_delta_case("truncated", old, N, old, N - 1234, 280);
+    test_delta_case("bytes inserted at the start", old, N, cur, N + 8, 280, cpres);
+    test_delta_case("truncated", old, N, old, N - 1234, 280, cpres);
     for (i = 0; i < N; i++) {
         x = x * 1103515245u + 12345u;
         cur[i] = (uint8_t)(x >> 16);
     }
-    test_delta_case("nothing in common", old, N, cur, N, 0);
-    test_delta_case("empty new file", old, N, cur, 0, 0);
-    test_delta_case("empty basis", old, 0, old, N, 0);
-    test_delta_case("small file", old, 10, old, 5, 0);
+    test_delta_case("nothing in common", old, N, cur, N, 0, cpres);
+    test_delta_case("empty new file", old, N, cur, 0, 0, cpres);
+    test_delta_case("empty basis", old, 0, old, N, 0, cpres);
+    test_delta_case("small file", old, 10, old, 5, 0, cpres);
+    /* Text compresses, and long literal runs span several records. */
+    for (i = 0; i < N; i++)
+        cur[i] = (uint8_t)"the quick brown fox jumps over the lazy dog\n"[i % 44 + (i / 3001) % 2];
+    test_delta_case("text, no basis", old, 0, cur, N, 0, cpres);
+    memcpy(old, cur, N);
+    memcpy(cur + 5000, "a change", 8);
+    test_delta_case("text, changed", old, N, cur, N, 280, cpres);
     free(old);
     free(cur);
 }
@@ -202,5 +235,7 @@ void test_push_suite(void)
 {
     test_flist_roundtrip(1);
     test_flist_roundtrip(0);
-    test_delta();
+    test_delta(CPRES_NONE);
+    test_delta(CPRES_ZLIB);
+    test_delta(CPRES_ZLIBX);
 }

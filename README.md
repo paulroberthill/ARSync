@@ -44,6 +44,15 @@ its contents too.
 | `-v`, `--verbose` | list transferred files and a summary; `-vv` for more |
 | `-P`, `--progress` | show progress for each file |
 | `-W`, `--whole-file` | don't use delta transfer (can be quicker with a slow CPU and a fast network) |
+| `-z`, `--compress` | compress file data in transit (worth it on slow links; costs CPU) |
+| `--compress-level=N` | zlib level 1–9 (default 6) |
+| `--zc=zlib\|zlibx` | compression method (default: agreed with the server) |
+| `--delete` | delete destination files that aren't on the source side |
+| `--delete-excluded` | also delete excluded files on the destination (implies `--delete`) |
+| `--exclude=PATTERN` | skip files matching PATTERN |
+| `--include=PATTERN` | don't skip files matching PATTERN (put it before a wider `--exclude`) |
+| `--exclude-from=FILE`, `--include-from=FILE` | read patterns from FILE, one per line (lines starting with `#` or `;` are ignored) |
+| `--filter=RULE` | a rule like `- *.info` or `+ docs/`; `!` clears the rules so far |
 | `--list-only` | list files instead of copying |
 | `--password-file=FILE` | password for modules that need one (or set `RSYNC_PASSWORD`, or type it when asked) |
 | `--port=PORT` | daemon port for `HOST::` locations (default 873) |
@@ -74,10 +83,25 @@ When sending, files get permissions 0644 and directories 0755 on the server (sub
 its umask); AmigaDOS protection bits aren't translated. Soft links are listed but, as with
 rsync without `-l`, not copied.
 
+## Excludes and `--delete`
+
+Patterns work as in rsync: `*`, `?` and `[...]` match within a name, `**` across `/`; a
+pattern with a `/` is matched against the path from the transfer's top, and a leading `/`
+anchors it there; a trailing `/` matches only directories. The first matching rule wins.
+For example, `--include='*/' --include='*.mod' --exclude='*'` copies only `.mod` files.
+
+`--delete` removes files on the destination that the source doesn't have, so the two end
+up the same. When pulling, arsync does the deleting (and says `deleting NAME` with `-v`);
+when sending, the server does. Excluded files are left alone unless you add
+`--delete-excluded`. Try it with `-n` first. If the server couldn't read some of its
+files, arsync deletes nothing, as rsync does.
+
+When sending with `-z`, files that are already packed (`.lha`, `.lzx`, `.dms`, `.zip`,
+`.gz`, `.jpg`, `.mp3` and the like) are sent uncompressed.
+
 ## Not supported
 
-`--delete`, include/exclude rules, compression (`-z`), symlinks, permissions/owners, ssh
-transport. `--delete`, excludes and `-z` are planned.
+Symlinks, permissions/owners, ssh transport.
 
 ## Building
 
@@ -100,4 +124,5 @@ See `DESIGN.md` for how it works and how it differs from rsync.
 
 ## Licence
 
-MIT; see `LICENSE`. No rsync source code is included.
+MIT; see `LICENSE`. No rsync source code is included. The Amiga build includes zlib 1.3.1
+(`third_party/zlib`, zlib licence).

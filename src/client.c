@@ -358,6 +358,10 @@ int client_pull(ars_session *s, const ars_options *o, const char *dest)
 
     fmt.varint_flags = (s->compat_flags & CF_VARINT_FLIST_FLAGS) != 0;
     fmt.safe_flist = (s->compat_flags & CF_SAFE_FLIST) || s->protocol >= 31;
+    /* Our own byte counts (used when the server sends no statistics)
+     * start with the transfer, as rsync's do. */
+    s->conn.bytes_in = s->conn.bytes_out = 0;
+    memset(&stats, 0, sizeof stats);
 
     /* rsync shows this only when directories are being transferred. */
     show_flist = (o->verbose || o->progress) && (o->recursive || o->list_only);
@@ -385,17 +389,24 @@ int client_pull(ars_session *s, const ars_options *o, const char *dest)
         printf("done\n");
 
     /* With an empty list the server stops straight away (rsync's client
-     * doesn't run the transfer phases either). */
-    if (p.fl.count == 0)
+     * doesn't run the transfer phases either), so there are no statistics
+     * from it; rsync then shows its own counts. */
+    if (p.fl.count == 0) {
+        if (o->verbose) {
+            stats.sent = s->conn.bytes_out;
+            stats.received = s->conn.bytes_in;
+            print_summary(&p, &stats);
+        }
         goto report;
+    }
 
     if (dest) {
         p.fstate = calloc(p.fl.count, 1);
         p.redo = malloc(p.fl.count * sizeof *p.redo);
-        p.buf = malloc(CHUNK_SIZE);
         p.block = malloc(MAX_BLOCK_SIZE);
         p.basis_buf = malloc(BASIS_CACHE);
-        if (!p.fstate || !p.redo || !p.buf || !p.block || !p.basis_buf) {
+        if (!p.fstate || !p.redo || !p.block || !p.basis_buf
+            || token_rx_init(&p.tok, s->compression) != WIRE_OK) {
             fprintf(stderr, "arsync: out of memory\n");
             rc = RERR_MALLOC;
             goto out;
@@ -409,7 +420,6 @@ int client_pull(ars_session *s, const ars_options *o, const char *dest)
         list_files(&p);
     }
 
-    memset(&stats, 0, sizeof stats);
     if ((rc = run_phases(&p, &stats)) != RERR_OK)
         goto out;
     if (dest)
@@ -436,9 +446,10 @@ out:
     recv_cleanup(&p);
     free(p.fstate);
     free(p.redo);
-    free(p.buf);
     free(p.block);
     free(p.basis_buf);
+    token_rx_free(&p.tok);
+    free(p.by_name);
     flist_free(&p.fl);
     return rc;
 }

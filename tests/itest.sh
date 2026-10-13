@@ -14,6 +14,7 @@ FAIL=0
 
 cleanup() {
     [ -f "$WORK/rsyncd.pid" ] && kill "$(cat "$WORK/rsyncd.pid")" 2>/dev/null
+    chmod -R u+rwx "$WORK" 2>/dev/null
     rm -rf "$WORK"
 }
 trap cleanup EXIT INT TERM
@@ -60,6 +61,13 @@ motd file = $WORK/motd
 [upload]
     path = $WORK/upload
     read only = no
+
+[del]
+    path = $WORK/del
+    comment = --delete, filter and compression fixtures
+
+[ioerr]
+    path = $WORK/ioerr
 
 [private]
     path = $WORK/pub
@@ -113,6 +121,37 @@ printf 'secret' > "$X/unreadable"
 chmod 000 "$X/unreadable"
 
 mkdir -p "$WORK/upload"
+
+# For --delete, filters and -z: the listing tree (minus the 5 GB file) plus
+# source-like files and a large compressible text file. Unlike xfer,
+# everything is readable, so nothing makes the server report I/O errors.
+DF="$WORK/del"
+mkdir -p "$DF"
+cp -a "$T/." "$DF/"
+rm "$DF/big-sparse"
+mkdir -p "$DF/src" "$DF/docs" "$DF/build/tmp"
+for f in src/main.c src/main.o src/util.c src/util.o docs/readme.txt docs/notes.txt \
+         build/out.bin build/tmp/x keep.me; do
+    echo "$f" > "$DF/$f"
+done
+head -c 20000 /dev/urandom > "$DF/docs/img.png"
+seq 1 150000 > "$DF/big.txt"
+head -c 300000 /dev/urandom | gzip -1 > "$DF/packed.gz"
+printf '# comment\n*.o\n\n/size*\n; another comment\n+ keep.me\nkeep*\n' > "$WORK/excl"
+
+# Names for checking filter rules against rsync's.
+FT="$WORK/ftree"
+for f in tmp/x a/tmp/y a/b/tmp/z d1/d2/d3/deep d1/deep x/d1/d2/deep src/main.c src/main.o main.o \
+         docs/a.txt docs/sub/b.txt x.txt b x/b q/a/b/c a/b/b/c "a b" ab/c "[x]" 'star*' srcx/f \
+         1abc Q.txt; do
+    mkdir -p "$FT/$(dirname "$f")"
+    echo "$f" > "$FT/$f"
+done
+
+# A module whose listing has an I/O error (an unreadable directory).
+mkdir -p "$WORK/ioerr/locked"
+echo a > "$WORK/ioerr/a.txt"
+chmod 000 "$WORK/ioerr/locked"
 
 # Names and sizes AmigaDOS can't hold (checked with --amiga-rules).
 N="$WORK/names"
@@ -282,8 +321,8 @@ tree_sig() {
 }
 
 # pull NAME SIG-MODE SETUP ARGS... : SETUP is a shell snippet run in both
-# destinations first (with $D set), e.g. to pre-populate them. Use "@" in
-# ARGS for the destination.
+# destinations first (with $D set), e.g. to pre-populate them. Use "@" (or
+# "@/") in ARGS for the destination.
 pull() {
     name=$1
     mode=$2
@@ -297,7 +336,10 @@ pull() {
         set -- "$@"
         args=
         for a in "$@"; do
-            [ "$a" = "@" ] && a="$D/dest"
+            case $a in
+            @) a="$D/dest" ;;
+            @/) a="$D/dest/" ;;
+            esac
             args="$args '$a'"
         done
         if [ $side = want ]; then
@@ -310,6 +352,9 @@ pull() {
         # happens to be split into frames); destination paths differ by side.
         sed -i -e 's/^sent [0-9,]* bytes  received [0-9,]* bytes  [0-9.,]* bytes\/sec$/sent N bytes  received N bytes/' \
                -e 's/speedup is [0-9.,]*/speedup is N/' -e "s|$WORK/$side|DEST|g" "$WORK/$side.out"
+        # rsync logs deletions and transfers from different processes, so
+        # their relative order varies; with SORTED set, compare as sets.
+        [ -n "${SORTED:-}" ] && sort -o "$WORK/$side.out" "$WORK/$side.out"
     done
     ok=1
     cmp -s "$WORK/want.rc" "$WORK/got.rc" || ok=0
@@ -474,6 +519,7 @@ pushcase() {
         echo $? > "$WORK/$side.rc"
         sed -i -e 's/^sent [0-9,]* bytes  received [0-9,]* bytes  [0-9.,]* bytes\/sec$/sent N bytes  received N bytes/' \
                -e 's/speedup is [0-9.,]*/speedup is N/' -e "s|\\b$side/dest|SIDE/dest|" "$WORK/$side.out"
+        [ -n "${SORTED:-}" ] && sort -o "$WORK/$side.out" "$WORK/$side.out"
     done
     ok=1
     cmp -s "$WORK/want.rc" "$WORK/got.rc" || ok=0
@@ -552,6 +598,156 @@ else
     FAIL=$((FAIL + 1))
     echo "FAIL delta efficiency (received ${received:-?} bytes for a 3 MB file)"
 fi
+
+# --- --delete, filters, compression (M8) -------------------------------------
+
+DEL="$URL/del"
+SEEDD="'$RSYNC' -rt '$DEL/' dest >/dev/null 2>&1"
+# Whatever a setup creates or changes gets a fixed time, so both sides match.
+AGE="find dest -newer '$WORK/excl' -exec touch -h -d 2001-01-01 {} +"
+EXTRA="mkdir -p dest/gone/deeper dest/src/old; touch dest/extra dest/gone/x.o dest/gone/z dest/gone/deeper/q dest/src/old/f dest/src/stale.o dest/d1/d2/extra.o dest/zz-last; $AGE"
+SORTED=1
+pull "pull --delete" times "$SEEDD; $EXTRA" -rtv --delete "$DEL/" @
+pull "pull --delete, nothing to delete" times "$SEEDD" -rtv --delete "$DEL/" @
+pull "pull --delete into new dir" times "" -rt --delete "$DEL/" @
+pull "pull --delete -n" times "$SEEDD; $EXTRA" -rtvn --delete "$DEL/" @
+pull "pull --delete without -v" times "$SEEDD; $EXTRA" -rt --delete "$DEL/" @
+# A directory that keeps excluded files gets a new time from the deletions.
+pull "pull --delete --exclude (excluded files stay)" notimes "$SEEDD; $EXTRA" -rtv --delete --exclude='*.o' "$DEL/" @
+pull "pull --delete-excluded" times "$SEEDD; $EXTRA" -rtv --delete-excluded --exclude='*.o' --exclude=docs/ "$DEL/" @
+pull "pull --delete-excluded -n" times "$SEEDD; $EXTRA" -rtvn --delete-excluded --exclude='*.o' "$DEL/" @
+pull "pull --delete of a dir without trailing slash" times \
+    "mkdir -p dest/src; touch dest/src/extra dest/extra-top; $AGE" -rtv --delete "$DEL/src" @
+pull "pull --delete, non-empty dir in place of file" times \
+    "$SEEDD; rm dest/a; mkdir -p dest/a/sub; touch dest/a/sub/f dest/a/g" -rtv --delete "$DEL/" @
+pull "pull --delete skipped after I/O error" times "mkdir -p dest/locked; touch dest/extra; $AGE" \
+    -rtv --delete "$URL/ioerr/" @
+SORTED=
+compare "--delete without -r" --delete "$DEL/a" "$WORK/nowhere"
+
+pull "pull --exclude=*.o" times "" -rtv --exclude='*.o' "$DEL/" @
+pull "pull --exclude dirs (dir/ and anchored)" times "" -rtv --exclude='src/' --exclude='/b' --exclude=/d1/d2 "$DEL/" @
+pull "pull --include/--exclude (only *.c)" times "" -rtv --include='*/' --include='*.c' --exclude='*' "$DEL/" @
+pull "pull --exclude with **" times "" -rtv --exclude='d1/**/deep' --exclude='**/tmp' "$DEL/" @
+pull "pull --exclude with classes and ?" times "" -rtv --exclude='[ab]*' --exclude='?.e' --exclude='[!s]ize*' "$DEL/" @
+pull "pull --filter rules" times "" -rtv --filter='+ docs/***' --filter='- *.txt' --filter='exclude *.png' "$DEL/" @
+pull "pull --exclude-from" times "" -rtv --exclude-from="$WORK/excl" "$DEL/" @
+pull "pull --exclude matching the top dir" times "" -rtv --exclude=src "$DEL/src" @
+pull "pull --exclude '!' clears" times "" -rtv --exclude='*.o' --exclude='!' --exclude='*.c' "$DEL/" @
+
+CHANGE_TXT="printf 'changed line\n' | dd of=dest/big.txt bs=1 seek=400000 conv=notrunc 2>/dev/null; $OLD dest/big.txt"
+pull "pull -z" times "" -rtvz "$DEL/" @
+pull "pull -z delta" times "$SEEDD; $CHANGE_TXT" -rtvz "$DEL/" @
+pull "pull --zc=zlib delta" times "$SEEDD; $CHANGE_TXT" -rtv --zc=zlib "$DEL/" @
+pull "pull --zc=zlibx delta" times "$SEEDD; $CHANGE_TXT" -rtv --zc=zlibx "$DEL/" @
+pull "pull -z --compress-level=1, binary delta" times \
+    "$COPY; printf XXXXXXXX | dd of=dest/random-3m bs=1 seek=1500000 conv=notrunc 2>/dev/null; $OLD dest/random-3m" \
+    -rtvz --compress-level=1 "$XF/" @
+pull "pull -z 3000 small files" times "" -rtz "$URL/many/" @
+SORTED=1
+pull "pull -z --delete --exclude together" notimes "$SEEDD; $EXTRA; $CHANGE_TXT" -rtvz --delete --exclude='*.o' "$DEL/" @
+SORTED=
+
+# Pushing: the server deletes and reports; we filter what we send.
+SEEDP="'$RSYNC' -rt '$DF/' dest >/dev/null 2>&1"
+PEXTRA="mkdir -p dest/gone/deeper; touch dest/extra dest/gone/x.o dest/gone/z dest/gone/deeper/q dest/src/stale.o dest/d1/d2/extra.o; $AGE"
+PCHANGE="printf 'changed line\n' | dd of=dest/big.txt bs=1 seek=400000 conv=notrunc 2>/dev/null; $OLD dest/big.txt"
+SORTED=1
+pushcase "push --delete" times "$SEEDP; $PEXTRA" -rtv --delete "$DF/" @
+pushcase "push --delete -n" times "$SEEDP; $PEXTRA" -rtvn --delete "$DF/" @
+pushcase "push --delete --exclude (excluded files stay)" notimes "$SEEDP; $PEXTRA" -rtv --delete --exclude='*.o' "$DF/" @
+pushcase "push --delete-excluded" times "$SEEDP; $PEXTRA" -rtv --delete-excluded --exclude='*.o' "$DF/" @
+SORTED=
+pushcase "push --exclude" times "" -rtv --exclude='*.o' --exclude='/docs/' --exclude='d1/**/deep' "$DF/" @
+pushcase "push --include/--exclude (only *.c)" times "" -rtv --include='*/' --include='*.c' --exclude='*' "$DF/" @
+pushcase "push --exclude-from" times "" -rtv --exclude-from="$WORK/excl" "$DF/" @
+pushcase "push --exclude matching the top dir" times "" -rtv --exclude=src "$DF/src" @
+pushcase "push -z" times "" -rtvz "$DF/" @
+pushcase "push -z delta" times "$SEEDP; $PCHANGE" -rtvz "$DF/" @
+pushcase "push --zc=zlib delta" times "$SEEDP; $PCHANGE" -rtv --zc=zlib "$DF/" @
+pushcase "push --zc=zlibx delta" times "$SEEDP; $PCHANGE" -rtv --zc=zlibx "$DF/" @
+pushcase "push -z --compress-level=9, binary delta" times \
+    "$SEED; printf XXXXXXXX | dd of=dest/random-3m bs=1 seek=1500000 conv=notrunc 2>/dev/null; $OLD dest/random-3m" \
+    -rtvz --compress-level=9 "$X/" @
+pushcase "push -z 3000 small files" times "" -rtz "$WORK/many/" @
+
+# Filter rules: what a dry-run push would send must match rsync's choice,
+# for each of these rule sets (one per line, shell-quoted).
+while IFS= read -r rules; do
+    eval "set -- $rules"
+    fargs=
+    for r in "$@"; do
+        fargs="$fargs --filter='$r'"
+    done
+    eval "pushcase \"filter \$rules\" times '' -rnv $fargs '$FT/' @" < /dev/null
+done <<'EOF'
+'- **/tmp'
+'- tmp'
+'- /tmp'
+'- d1/**/deep'
+'- d1/*/deep'
+'- **/deep'
+'- *.o'
+'- src/'
+'- /b'
+'- b'
+'- a/*/c'
+'- d1/d2'
+'+ docs/***' '- *.txt'
+'+ */' '+ *.c' '- *'
+'- [ab]*'
+'- [!s]*'
+'- ?.txt'
+'- \[x\]'
+'- star\*'
+'- a b'
+'- [[:digit:]]*'
+'- *b'
+'- a/**'
+'- a/***'
+'- **'
+'- */'
+'- *'
+'+ a/' '+ a/b/' '+ a/b/tmp/***' '- *'
+'- d1/d2/'
+'- **/b/**'
+'- /a/*/tmp'
+'- src/*.o'
+'- **/b'
+'- *tmp/**'
+'- /a/**/z'
+'- [a-c]'
+'- /**/tmp'
+'- **tmp'
+'- **/'
+'- **/a/*'
+'- *a*/**/b'
+'- a/'
+'- /a/'
+'- /a/b/'
+'+ /a/' '- /*'
+'- d?/'
+'- **/d2/d3/'
+'- a/b'
+'- /a b'
+'- [x]'
+'- *[[]*'
+'- a/***' '+ a/b/***'
+'+ a/b/***' '- a/***'
+'- ***'
+'- src/***'
+'- *.[oc]'
+EOF
+
+# -z must actually shrink a compressible transfer (big.txt is ~1 MB of text).
+rm -rf "$WORK/zt"
+zr=$("$ARSYNC" -tvz "$DEL/big.txt" "$WORK/zt" | sed -n 's/.*received \([0-9,]*\) bytes.*/\1/p' | tr -d ,)
+check "pull -z compresses (received ${zr:-?} bytes for $(wc -c < "$DF/big.txt") bytes)" \
+    [ -n "$zr" ] && [ "$zr" -lt 400000 ] && cmp -s "$DF/big.txt" "$WORK/zt"
+mkdir -p "$WORK/upload/zt"
+zs=$("$ARSYNC" -tvz "$DF/big.txt" "$URL/upload/zt/big.txt" | sed -n 's/^sent \([0-9,]*\) bytes.*/\1/p' | tr -d ,)
+check "push -z compresses (sent ${zs:-?} bytes)" \
+    [ -n "$zs" ] && [ "$zs" -lt 400000 ] && cmp -s "$DF/big.txt" "$WORK/upload/zt/big.txt"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

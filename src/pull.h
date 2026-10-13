@@ -12,6 +12,7 @@
 #include "progress.h"
 #include "plat.h"
 #include "session.h"
+#include "token.h"
 
 /* Item flags exchanged with each request and reply (ITEM_*). */
 #define ITEM_REPORT_ATIME (1 << 0)
@@ -60,6 +61,10 @@ typedef struct pull_state {
     int32_t *redo;              /* indexes to request again */
     size_t redo_count;
 
+    uint32_t *by_name;          /* --delete: list indexes sorted by name */
+    size_t by_name_count;
+    int delete_warned;          /* said why nothing gets deleted */
+
     char failed_dir[FLIST_MAXPATH];  /* contents of this dir are skipped */
     int xfer_error;             /* some file failed: exit code 23 */
     int interrupted;            /* Ctrl-C seen and reported */
@@ -67,8 +72,8 @@ typedef struct pull_state {
     long xfr_count;             /* files transferred, for --progress */
     ars_progress progress;
 
+    ars_token_rx tok;           /* file data as it arrives */
     char tmp[FLIST_MAXPATH];    /* temp file being written, "" if none */
-    uint8_t *buf;               /* CHUNK_SIZE bytes for file data */
     uint8_t *block;             /* MAX_BLOCK_SIZE bytes for the generator */
 
     /* The receiver's view of the old file a delta refers to. */
@@ -98,6 +103,13 @@ int pull_check_break(pull_state *p);
 int gen_entry(pull_state *p, size_t ndx);
 /* Writes a request for a file again (redo phase). */
 void gen_redo(pull_state *p, int32_t ndx);
+
+/* delete.c: with --delete, removes what directory entry ndx (at local)
+ * holds that the list doesn't. */
+void delete_in_dir(pull_state *p, size_t ndx, const char *local);
+/* Removes the directory at local, contents and all, to make way for file
+ * ndx. Returns PLAT_OK, or an error if anything had to stay. */
+int delete_for_file(pull_state *p, size_t ndx, const char *local);
 
 /* receiver.c: reads and handles one reply. Sets *done when it was
  * NDX_DONE instead. Unless until_done is set, returns without reading
