@@ -7,6 +7,10 @@ a large file with small changes only sends the changes, in either direction.
 It's a clean-room implementation written for the Amiga: one process (no `fork()`),
 `bsdsocket.library` and `dos.library` called directly, and Ctrl-C honoured throughout.
 
+**Written by an AI.** The code, tests and documentation were written by Claude (Anthropic's
+AI model) in Claude Code, directed and tested on the Amiga by Paul Hill. See
+`dist/arsync.readme` for the version history.
+
 ## Requirements
 
 - AmigaOS 3.1 or later, 68020 or better (Fast RAM recommended)

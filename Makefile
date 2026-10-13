@@ -111,6 +111,8 @@ release: $(AMIGA_DIR)/arsync
 	mkdir -p $(RELEASE_DIR)
 	$(AMIGA_STRIP) -o $(RELEASE_DIR)/arsync $(AMIGA_DIR)/arsync
 	sed 's/@VERSION@/$(VERSION)/' dist/arsync.readme > $(RELEASE_DIR)/arsync.readme
+	@# Aminet wants the readme next to the archive too, with the same name.
+	cp $(RELEASE_DIR)/arsync.readme build/release/arsync-$(VERSION).readme
 	cp README.md LICENSE $(RELEASE_DIR)/
 	@# Aminet wants .lha; Lhasa (often installed as "lha") can't create
 	@# archives, so fall back to .tar.gz when no LHA archiver is found.
