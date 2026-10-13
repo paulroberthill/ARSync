@@ -29,6 +29,7 @@
 #include <time.h>
 
 #include "client.h"
+#include "digest.h"
 #include "output.h"
 #include "plat.h"
 #include "pull.h"
@@ -244,7 +245,7 @@ static int resolve_dest(pull_state *p, const char *dest)
             return RERR_FILEIO;
         }
         p->dest_created = 1;
-        if (p->o->verbose || p->o->progress)
+        if (p->o->verbose || p->o->progress || p->o->itemize)
             printf("created directory %s\n", p->dest);
         return RERR_OK;
     }
@@ -348,9 +349,13 @@ int client_pull(ars_session *s, const ars_options *o, const char *dest)
     memset(&p, 0, sizeof p);
     p.s = s;
     p.o = o;
+    p.cur_ndx = -1;
     ndx_state_init(&p.gen_ndx);
     ndx_state_init(&p.recv_ndx);
     flist_init(&p.fl);
+    /* With -c the server sends each file's checksum in the list. */
+    if (o->checksum)
+        p.fl.sum_len = DIGEST_LEN;
 
     fmt.varint_flags = (s->compat_flags & CF_VARINT_FLIST_FLAGS) != 0;
     fmt.safe_flist = (s->compat_flags & CF_SAFE_FLIST) || s->protocol >= 31;
@@ -444,6 +449,8 @@ report:
     }
 
 out:
+    if (o->partial)
+        recv_keep_partial(&p);
     recv_cleanup(&p);
     free(p.fstate);
     free(p.redo);

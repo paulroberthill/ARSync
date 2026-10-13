@@ -38,7 +38,7 @@
 #define CF_VARINT_FLIST_FLAGS (1 << 7)
 #define CF_ID0_NAMES (1 << 8)
 
-#define SESSION_MAX_ARGS 16
+#define SESSION_MAX_ARGS 24
 
 typedef struct ars_session {
     time_t started;             /* for the transfer rate */
@@ -55,6 +55,7 @@ typedef struct ars_session {
     int32_t checksum_seed;
     int compression;            /* CPRES_*, for file data */
     int verbose;                /* for messages the server sends */
+    int log_deletions;          /* print MSG_DELETED: 1, or 2 as -i */
 
     /* Multiplexed streams, valid once multiplexing has started. */
     ars_demux demux;

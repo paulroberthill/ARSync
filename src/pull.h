@@ -15,19 +15,6 @@
 #include "session.h"
 #include "token.h"
 
-/* Item flags exchanged with each request and reply (ITEM_*). */
-#define ITEM_REPORT_ATIME (1 << 0)
-#define ITEM_REPORT_CHANGE (1 << 1)
-#define ITEM_REPORT_SIZE (1 << 2)
-#define ITEM_REPORT_TIME (1 << 3)
-#define ITEM_REPORT_PERMS (1 << 4)
-#define ITEM_BASIS_TYPE_FOLLOWS (1 << 11)
-#define ITEM_XNAME_FOLLOWS (1 << 12)
-#define ITEM_IS_NEW (1 << 13)
-#define ITEM_LOCAL_CHANGE (1 << 14)
-#define ITEM_TRANSFER (1 << 15)
-/* Flags that make an item worth reporting. */
-#define ITEM_SIGNIFICANT (0xFFFF & ~(ITEM_BASIS_TYPE_FOLLOWS | ITEM_XNAME_FOLLOWS | ITEM_LOCAL_CHANGE))
 
 #define MAX_BLOCK_SIZE (1L << 17)
 #define CHUNK_SIZE 32768
@@ -76,6 +63,8 @@ typedef struct pull_state {
 
     ars_token_rx tok;           /* file data as it arrives */
     char tmp[FLIST_MAXPATH];    /* temp file being written, "" if none */
+    long cur_ndx;               /* the file being received, -1 if none */
+    int got_literal;            /* new data arrived for it (--partial) */
     uint8_t *block;             /* MAX_BLOCK_SIZE bytes for the generator */
 
     /* The receiver's view of the old file a delta refers to. */
@@ -120,5 +109,6 @@ int delete_for_file(pull_state *p, size_t ndx, const char *local);
 int recv_reply(pull_state *p, int until_done, int *done);
 /* Removes a half-written temp file (on errors and Ctrl-C). */
 void recv_cleanup(pull_state *p);
+void recv_keep_partial(pull_state *p);
 
 #endif

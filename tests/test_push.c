@@ -7,11 +7,13 @@
 #include "flist.h"
 #include "match.h"
 #include "options.h"
+#include "output.h"
 #include "plat.h"
 #include "token.h"
 
-/* What a sender encodes, a receiver must decode to the same list. */
-static void test_flist_roundtrip(int varint)
+/* What a sender encodes, a receiver must decode to the same list; with
+ * sums (-c), each regular file's checksum too. */
+static void test_flist_roundtrip(int varint, int sums)
 {
     char longname[400], err[64];
     ars_flist_format fmt;
@@ -26,6 +28,7 @@ static void test_flist_roundtrip(int varint)
     longname[300] = '\0';
 
     flist_init(&a);
+    a.sum_len = sums ? DIGEST_LEN : 0;
     flist_add(&a, ".", WIRE_S_IFDIR | 0755, 0, 1700000000, 0);
     a.files[0].xflags = XMIT_TOP_DIR;
     flist_add(&a, "dir", WIRE_S_IFDIR | 0755, 0, 1700000000, 0);
@@ -33,6 +36,9 @@ static void test_flist_roundtrip(int varint)
     flist_add(&a, "dir/file-b", WIRE_S_IFREG | 0644, 0, 1700000001, 0);
     flist_add(&a, longname, WIRE_S_IFREG | 0600, 7, -5, 0);
     flist_add(&a, "link", WIRE_S_IFLNK | 0777, 1, 1, 0);
+    for (i = 0; i < a.count; i++)
+        if (sums && WIRE_ISREG(a.files[i].mode))
+            memset(flist_sum(&a, &a.files[i]), (int)(0xA0 + i), DIGEST_LEN);
     flist_sort_and_clean(&a);
 
     fmt.varint_flags = varint;
@@ -41,6 +47,7 @@ static void test_flist_roundtrip(int varint)
     membuf_writer(&w, &mb);
     flist_send(&a, &w, &fmt, 32, IOERR_GENERAL);
     flist_init(&b);
+    b.sum_len = a.sum_len;
     membuf_reader(&r, &mb);
     CHECK_EQ(flist_recv(&b, &r, &fmt, err, sizeof err), WIRE_OK);
     CHECK_EQ(mb.pos, mb.len);
@@ -52,6 +59,8 @@ static void test_flist_roundtrip(int varint)
         CHECK_EQ(a.files[i].size, b.files[i].size);
         CHECK_EQ(a.files[i].mtime, b.files[i].mtime);
         CHECK_EQ(a.files[i].mtime_nsec, b.files[i].mtime_nsec);
+        if (sums && WIRE_ISREG(a.files[i].mode))
+            CHECK_MEM(flist_sum(&b, &b.files[i]), flist_sum(&a, &a.files[i]), DIGEST_LEN);
     }
     CHECK(b.files[0].xflags & XMIT_TOP_DIR);
     flist_free(&a);
@@ -231,10 +240,45 @@ static void test_delta(int cpres)
     free(cur);
 }
 
+/* -i strings, as rsync's log.c builds them. */
+static void test_itemize(void)
+{
+    static const struct {
+        long iflags;
+        uint32_t mode;
+        int sending;
+        const char *want;
+    } v[] = {
+        { ITEM_TRANSFER | ITEM_IS_NEW, WIRE_S_IFREG, 0, ">f+++++++++" },
+        { ITEM_TRANSFER | ITEM_REPORT_SIZE | ITEM_REPORT_TIME, WIRE_S_IFREG, 0, ">f.st......" },
+        { ITEM_TRANSFER | ITEM_REPORT_CHANGE | ITEM_REPORT_TIME, WIRE_S_IFREG, 1, "<fc.t......" },
+        { ITEM_LOCAL_CHANGE | ITEM_IS_NEW, WIRE_S_IFDIR, 0, "cd+++++++++" },
+        { ITEM_REPORT_TIME, WIRE_S_IFDIR, 1, ".d..t......" },
+        { 0, WIRE_S_IFREG, 0, ".f         " },
+        { 0, WIRE_S_IFLNK, 0, ".L         " },
+        { ITEM_TRANSFER, WIRE_S_IFREG, 0, ">f........." },
+    };
+    char buf[12];
+    size_t i;
+
+    for (i = 0; i < sizeof v / sizeof v[0]; i++)
+        CHECK(strcmp(itemize_string(v[i].iflags, v[i].mode, v[i].sending, buf), v[i].want) == 0);
+    /* Shown without -i: changed directories and local changes only. */
+    CHECK(item_shown(0, 1, ITEM_REPORT_TIME, WIRE_S_IFDIR));
+    CHECK(!item_shown(0, 1, ITEM_REPORT_TIME, WIRE_S_IFREG));
+    CHECK(item_shown(1, 0, ITEM_REPORT_TIME, WIRE_S_IFREG));
+    CHECK(!item_shown(1, 0, 0, WIRE_S_IFREG));
+    CHECK(item_shown(2, 0, 0, WIRE_S_IFREG));
+    CHECK(item_shown(1, 2, 0, WIRE_S_IFREG));
+}
+
 void test_push_suite(void)
 {
-    test_flist_roundtrip(1);
-    test_flist_roundtrip(0);
+    test_flist_roundtrip(1, 0);
+    test_flist_roundtrip(0, 0);
+    test_flist_roundtrip(1, 1);
+    test_flist_roundtrip(0, 1);
+    test_itemize();
     test_delta(CPRES_NONE);
     test_delta(CPRES_ZLIB);
     test_delta(CPRES_ZLIBX);

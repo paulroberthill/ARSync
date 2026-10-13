@@ -146,6 +146,20 @@ static int parse_long(ars_options *o, const char *opt, int argc, char **argv, in
         o->progress = 1;
     else if (strcmp(name, "stats") == 0)
         o->stats = 1;
+    else if (strcmp(name, "itemize-changes") == 0)
+        o->itemize++;
+    else if (strcmp(name, "update") == 0)
+        o->update = 1;
+    else if (strcmp(name, "ignore-existing") == 0)
+        o->ignore_existing = 1;
+    else if (strcmp(name, "existing") == 0 || strcmp(name, "ignore-non-existing") == 0)
+        o->existing = 1;
+    else if (strcmp(name, "size-only") == 0)
+        o->size_only = 1;
+    else if (strcmp(name, "checksum") == 0)
+        o->checksum = 1;
+    else if (strcmp(name, "partial") == 0)
+        o->partial = 1;
     else if (strcmp(name, "amiga-rules") == 0)
         o->amiga_rules = 1;
     else if (strcmp(name, "archive") == 0)
@@ -189,9 +203,17 @@ static int parse_short(ars_options *o, const char *opts, char *err, size_t errle
             o->whole_file = 1;
             break;
         case 'P':
-            /* rsync's -P is --partial --progress; arsync never keeps
-             * partial files, so it's just --progress. */
-            o->progress = 1;
+            /* rsync's -P is --partial --progress. */
+            o->partial = o->progress = 1;
+            break;
+        case 'i':
+            o->itemize++;
+            break;
+        case 'u':
+            o->update = 1;
+            break;
+        case 'c':
+            o->checksum = 1;
             break;
         case 'a':
             /* rsync's -a is -rlptgoD; of those arsync supports -r and -t. */

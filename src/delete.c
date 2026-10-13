@@ -196,8 +196,9 @@ static int delete_item(del_ctx *c, int is_dir, int log_self)
     }
     if (log_self) {
         stats_count(p->st.deleted, is_dir ? WIRE_S_IFDIR : WIRE_S_IFREG);
-        if (p->o->verbose)
-            printf("deleting %s%s\n", c->rel, is_dir ? "/" : "");
+        /* rsync logs deletions with -v, or whenever it logs names. */
+        if (p->o->verbose || p->o->itemize || p->o->progress)
+            print_deleted(p->o->itemize, c->rel, is_dir);
     }
     return 0;
 }

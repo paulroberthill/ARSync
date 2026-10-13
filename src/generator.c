@@ -2,8 +2,10 @@
  *
  * For each file-list entry: directories are created locally; regular files
  * that already match (same size and modification time, rsync's "quick
- * check") are skipped; anything else is requested, with checksums of the
- * existing copy's blocks if there is one, so that only changes are sent. Items that change
+ * check"; or size alone with --size-only, size and whole-file checksum with
+ * -c) are skipped, as are those -u, --existing and --ignore-existing rule
+ * out; anything else is requested, with checksums of the existing copy's
+ * blocks if there is one, so that only changes are sent. Items that change
  * without a transfer (a new directory, say) are still reported to the
  * server, which echoes them back so the receiver can log them in order,
  * just as rsync does.
@@ -109,6 +111,22 @@ static void gen_dir(pull_state *p, size_t ndx, const char *local)
     rc = plat_stat(local, &st);
     exists = rc == PLAT_OK && st.type == PLAT_T_DIR;
 
+    if (rc == PLAT_ENOENT && p->o->existing) {
+        /* Neither it nor anything in it gets created. */
+        if (p->o->verbose > 1)
+            printf("not creating new directory \"%s\"\n", name);
+        snprintf(p->failed_dir, sizeof p->failed_dir, "%s", name);
+        p->fstate[ndx] |= FS_SKIPPED;
+        return;
+    }
+    if (rc == PLAT_OK && !exists && p->o->ignore_existing) {
+        if (p->o->verbose > 1)
+            printf("%s exists\n", name);
+        snprintf(p->failed_dir, sizeof p->failed_dir, "%s", name);
+        p->fstate[ndx] |= FS_SKIPPED;
+        return;
+    }
+
     if (rc == PLAT_OK && !exists && !p->o->dry_run) {
         /* A file is in the way: replace it, as rsync does. */
         if ((rc = plat_remove(local)) != PLAT_OK) {
@@ -130,7 +148,7 @@ static void gen_dir(pull_state *p, size_t ndx, const char *local)
         iflags = ITEM_REPORT_TIME;
     }
 
-    if ((iflags & ITEM_SIGNIFICANT) || p->o->verbose > 1)
+    if ((iflags & ITEM_SIGNIFICANT) || p->o->verbose > 1 || p->o->itemize > 1)
         write_item(p, (int32_t)ndx, iflags);
     /* A directory that was already there may hold things to delete. */
     if (exists && p->o->delete_mode && !(f->xflags & XMIT_NO_CONTENT_DIR))
@@ -142,14 +160,54 @@ skip_contents:
     snprintf(p->failed_dir, sizeof p->failed_dir, "%s", name);
 }
 
+/* rsync's quick check: is the existing file already up to date? Same size
+ * and then, by default, the same modification second (as the local
+ * filesystem can record it); with --size-only nothing more; with -c the
+ * same whole-file checksum instead of the time. */
+static int quick_check_ok(pull_state *p, const ars_file *f, const char *local,
+                          const plat_fileinfo *st)
+{
+    uint8_t sum[SUM_LENGTH];
+
+    if (st->size != f->size)
+        return 0;
+    if (p->o->checksum) {
+        file_sum(local, p->s->checksum_type, p->block, MAX_BLOCK_SIZE, sum);
+        return memcmp(sum, flist_sum(&p->fl, f), (size_t)p->fl.sum_len) == 0;
+    }
+    if (p->o->size_only)
+        return 1;
+    return st->mtime == plat_clamp_mtime(f->mtime);
+}
+
 static void gen_file(pull_state *p, size_t ndx, const char *local)
 {
     const ars_file *f = &p->fl.files[ndx];
+    const char *name = flist_name(&p->fl, f);
     plat_fileinfo st;
     uint16_t iflags = ITEM_TRANSFER;
     int rc;
 
     rc = plat_stat(local, &st);
+
+    /* What -u, --existing and --ignore-existing rule out, in rsync's
+     * order (before anything in the way is replaced). */
+    if (rc == PLAT_ENOENT && p->o->existing) {
+        if (p->o->verbose > 1)
+            printf("not creating new file \"%s\"\n", name);
+        return;
+    }
+    if (rc == PLAT_OK && p->o->ignore_existing) {
+        if (p->o->verbose > 1)
+            printf("%s exists\n", name);
+        return;
+    }
+    if (rc == PLAT_OK && p->o->update && plat_clamp_mtime(f->mtime) < st.mtime) {
+        if (p->o->verbose > 1)
+            printf("%s is newer\n", name);
+        return;
+    }
+
     if (rc == PLAT_OK && st.type == PLAT_T_DIR) {
         /* Like rsync without --force: an empty directory makes way. */
         if (p->o->dry_run) {
@@ -176,11 +234,22 @@ static void gen_file(pull_state *p, size_t ndx, const char *local)
     }
 
     if (rc == PLAT_OK) {
-        /* rsync's quick check: same size and same modification second
-         * (as the local filesystem can record it). */
-        if (st.size == f->size && st.mtime == plat_clamp_mtime(f->mtime)) {
-            if (p->o->verbose > 1)
+        if (quick_check_ok(p, f, local, &st)) {
+            /* Up to date, though with --size-only or -c the time may
+             * still need setting (and is then reported). */
+            if (p->o->times && st.mtime != plat_clamp_mtime(f->mtime)) {
+                if (!p->o->dry_run
+                    && (rc = plat_set_mtime(local, plat_clamp_mtime(f->mtime),
+                                            (long)f->mtime_nsec)) != PLAT_OK)
+                    pull_file_error(p, "arsync: failed to set times on %s: %s",
+                                    local, plat_strerror(rc));
+                /* rsync's set_file_attrs() names it at -vv (without -i). */
+                if (p->o->verbose > 1 && !p->o->itemize)
+                    printf("%s\n", name);
+                write_item(p, (int32_t)ndx, ITEM_REPORT_TIME);
+            } else if (p->o->verbose > 1 || p->o->itemize > 1) {
                 write_item(p, (int32_t)ndx, 0);
+            }
             return;
         }
         if (st.size != f->size)
@@ -190,8 +259,36 @@ static void gen_file(pull_state *p, size_t ndx, const char *local)
     } else {
         iflags |= ITEM_IS_NEW;
     }
+    /* rsync marks every -c transfer as a checksum change. */
+    if (p->o->checksum)
+        iflags |= ITEM_REPORT_CHANGE;
 
     request_file(p, (int32_t)ndx, iflags, local, rc == PLAT_OK ? &st : NULL, SHORT_SUM_LENGTH);
+}
+
+/* Symlinks and the like are listed even though we don't ask for them;
+ * rsync says it skips them, unless --existing or --ignore-existing (which
+ * it checks first) rule them out anyway. */
+static void gen_other(pull_state *p, size_t ndx, const char *local)
+{
+    const char *name = flist_name(&p->fl, &p->fl.files[ndx]);
+    plat_fileinfo st;
+    int rc;
+
+    if (p->o->existing || p->o->ignore_existing) {
+        rc = plat_stat(local, &st);
+        if (rc == PLAT_ENOENT && p->o->existing) {
+            if (p->o->verbose > 1)
+                printf("not creating new file \"%s\"\n", name);
+            return;
+        }
+        if (rc == PLAT_OK && p->o->ignore_existing) {
+            if (p->o->verbose > 1)
+                printf("%s exists\n", name);
+            return;
+        }
+    }
+    printf("skipping non-regular file \"%s\"\n", name);
 }
 
 int gen_entry(pull_state *p, size_t ndx)
@@ -229,9 +326,7 @@ int gen_entry(pull_state *p, size_t ndx)
     else if (WIRE_ISREG(f->mode))
         gen_file(p, ndx, local);
     else
-        /* Symlinks and the like are listed even though we don't ask for
-         * them; rsync always says it skips them. */
-        printf("skipping non-regular file \"%s\"\n", flist_name(&p->fl, f));
+        gen_other(p, ndx, local);
 
     return p->s->out.err ? session_stream_failure(p->s, "sending requests") : RERR_OK;
 }

@@ -15,6 +15,13 @@ typedef struct ars_options {
     int whole_file;     /* -W: no delta transfer */
     int progress;
     int stats;          /* --stats */
+    int itemize;        /* -i: 1, or 2 for -ii (unchanged items too) */
+    int update;         /* -u: skip files that are newer on the receiver */
+    int ignore_existing;/* --ignore-existing: only create new files */
+    int existing;       /* --existing: only update files already there */
+    int size_only;      /* --size-only: same size = up to date */
+    int checksum;       /* -c: compare whole-file checksums, not times */
+    int partial;        /* --partial: keep a partly received file */
     int max_name;       /* --max-name, -1 = detect */
     int amiga_rules;    /* apply AmigaDOS limits on any system (testing) */
     int list_only;      /* 1 = implied (no destination), 2 = --list-only */

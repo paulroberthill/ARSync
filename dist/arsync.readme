@@ -31,8 +31,13 @@ small changes is updated by sending only the changes, in either direction.
 
 Features
   - pull and push, recursive (-r), modification times (-t), dry run (-n),
-    progress (-P), verbose output and transfer summary (-v), --stats
+    progress, verbose output and transfer summary (-v), --stats
   - delta transfer (MD5 block checksums), or whole files with -W
+  - --partial (-P): an interrupted transfer keeps what arrived, and the
+    next run only fetches the rest
+  - choosing what to copy: -u (don't replace newer files), --existing,
+    --ignore-existing, --size-only, -c (compare by checksum)
+  - -i: rsync's itemized change list (>f.st...... name)
   - compression (-z, zlib and zlibx); packed files (.lha, .lzx, .dms,
     .zip...) are sent as they are
   - --exclude, --include, --exclude-from, --include-from, --filter,
@@ -53,6 +58,14 @@ Installation: copy arsync to C: (or anywhere in your path).
 
 History
 -------
+0.4.0 (2026-10-13)
+  - New: --partial, and -P now means --partial --progress as in rsync: a
+    transfer cut short (Ctrl-C, lost connection) keeps what arrived, and
+    the next run uses it, so only the rest is fetched.
+  - New: -u/--update, --existing, --ignore-existing, --size-only and
+    -c/--checksum, for choosing what gets transferred.
+  - New: -i/--itemize-changes (and -ii), rsync's per-file change codes.
+
 0.3.2 (2026-10-13)
   - New: --stats, rsync's transfer statistics (files, created, deleted,
     literal and matched data, bytes).

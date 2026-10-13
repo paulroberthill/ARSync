@@ -15,6 +15,20 @@ const char *timestring(int64_t t, char *buf);
 /* One --list-only line (without newline), as rsync prints it. */
 void format_list_entry(const ars_flist *fl, const ars_file *f, char *buf, size_t bufsize);
 
+/* --- items (one line per file of -v / -i output) --- */
+
+/* rsync's %i change summary, "YXcstpoguax": >f.st...... and so on.
+ * sending picks '<' over '>' for transfers. buf needs 12 bytes. */
+const char *itemize_string(long iflags, uint32_t mode, int sending, char *buf);
+/* Whether rsync's receiver or sender would log a non-transfer item
+ * (maybe_log_item()): any change with -i (everything with -ii, or -i -vv);
+ * otherwise only directories that changed and local changes. */
+int item_shown(int itemize, int verbose, long iflags, uint32_t mode);
+/* Prints an item as "name" or, with -i, "%i name" ("dir/" for directories). */
+void print_item(int itemize, const char *name, uint32_t mode, long iflags, int sending);
+/* A deletion: "deleting name", or "*deleting   name" with -i. */
+void print_deleted(int itemize, const char *name, int is_dir);
+
 /* Transfer statistics, as rsync keeps them for -v and --stats. The
  * per-type counts are indexed by STAT_*: [STAT_ALL] is the total, the
  * others are the non-regular items within it. */

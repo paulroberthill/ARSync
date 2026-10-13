@@ -32,4 +32,10 @@ uint32_t rolling_sum(const uint8_t *buf, size_t len);
 void block_sum(int digest_type, int32_t seed, int seed_first,
                const uint8_t *buf, size_t len, uint8_t out[SUM_LENGTH]);
 
+/* The whole-file checksum -c compares: the session's digest of the file,
+ * unseeded, read through buf. Returns PLAT_OK, a PLAT_E* error, or
+ * PLAT_EBREAK on Ctrl-C. On an error out is all zeros, as in rsync. */
+int file_sum(const char *path, int digest_type, uint8_t *buf, size_t bufsize,
+             uint8_t out[SUM_LENGTH]);
+
 #endif

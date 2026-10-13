@@ -2,6 +2,8 @@
 #ifndef FLIST_H
 #define FLIST_H
 
+#include <string.h>
+
 #include "wire.h"
 
 /* Unix mode bits as they travel on the wire (independent of the host). */
@@ -40,6 +42,28 @@
 
 #define FLIST_MAXPATH 1024
 
+/* Item flags exchanged with each request and reply (ITEM_*). */
+#define ITEM_REPORT_ATIME (1 << 0)
+#define ITEM_REPORT_CHANGE (1 << 1)
+#define ITEM_REPORT_SIZE (1 << 2)
+#define ITEM_REPORT_TIME (1 << 3)
+#define ITEM_REPORT_PERMS (1 << 4)
+#define ITEM_REPORT_OWNER (1 << 5)
+#define ITEM_REPORT_GROUP (1 << 6)
+#define ITEM_REPORT_ACL (1 << 7)
+#define ITEM_REPORT_XATTR (1 << 8)
+#define ITEM_REPORT_CRTIME (1 << 10)
+#define ITEM_BASIS_TYPE_FOLLOWS (1 << 11)
+#define ITEM_XNAME_FOLLOWS (1 << 12)
+#define ITEM_IS_NEW (1 << 13)
+#define ITEM_LOCAL_CHANGE (1 << 14)
+#define ITEM_TRANSFER (1 << 15)
+/* Local only, never sent: */
+#define ITEM_MISSING_DATA (1L << 16)
+#define ITEM_DELETED (1L << 17)
+/* Flags that make an item worth reporting. */
+#define ITEM_SIGNIFICANT (0xFFFF & ~(ITEM_BASIS_TYPE_FOLLOWS | ITEM_XNAME_FOLLOWS | ITEM_LOCAL_CHANGE))
+
 typedef struct ars_file {
     uint32_t name;      /* offset of the full path in the name pool */
     uint32_t mode;      /* wire mode; 0 = removed duplicate */
@@ -54,6 +78,10 @@ typedef struct ars_flist {
     size_t count, cap;
     char *names;        /* pool of NUL-terminated paths */
     size_t names_len, names_cap;
+    /* -c: bytes of whole-file checksum sent with each regular file, kept
+     * in the pool after its name (see flist_sum()); 0 = none. Set before
+     * adding entries. */
+    int sum_len;
     int io_error;       /* IOERR_* bits reported by the sender */
 } ars_flist;
 
@@ -81,6 +109,14 @@ void flist_send(const ars_flist *fl, ars_writer *w, const ars_flist_format *fmt,
 static inline const char *flist_name(const ars_flist *fl, const ars_file *f)
 {
     return fl->names + f->name;
+}
+
+/* The entry's whole-file checksum (fl->sum_len bytes; zeros if not set). */
+static inline uint8_t *flist_sum(const ars_flist *fl, const ars_file *f)
+{
+    const char *name = fl->names + f->name;
+
+    return (uint8_t *)name + strlen(name) + 1;
 }
 
 /* rsync's file-list order; exported for tests. */

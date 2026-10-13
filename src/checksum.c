@@ -1,6 +1,9 @@
 /* checksum.c - delta-transfer checksums */
+#include <string.h>
+
 #include "checksum.h"
 #include "digest.h"
+#include "plat.h"
 
 #define MAX_BLOCK_SIZE ((int32_t)1 << 17)
 #define BLOCKSUM_BIAS 10
@@ -115,4 +118,33 @@ void block_sum(int digest_type, int32_t seed, int seed_first,
     if (seed && !seed_first)
         digest_update(&d, s, 4);
     digest_final(&d, out);
+}
+
+int file_sum(const char *path, int digest_type, uint8_t *buf, size_t bufsize,
+             uint8_t out[SUM_LENGTH])
+{
+    ars_digest d;
+    plat_file *f;
+    long r;
+    int rc;
+
+    memset(out, 0, SUM_LENGTH);
+    if ((rc = plat_open_read(path, &f)) != PLAT_OK)
+        return rc;
+    digest_init(&d, digest_type);
+    for (;;) {
+        /* A big file takes a while to read on a 68k. */
+        if (plat_break_pending()) {
+            plat_close(f);
+            return PLAT_EBREAK;
+        }
+        if ((r = plat_read(f, buf, bufsize)) <= 0)
+            break;
+        digest_update(&d, buf, (size_t)r);
+    }
+    plat_close(f);
+    if (r < 0)
+        return PLAT_EIO;
+    digest_final(&d, out);
+    return PLAT_OK;
 }

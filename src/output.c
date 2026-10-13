@@ -176,3 +176,69 @@ void print_summary(const ars_stats *st, int full, int protocol, long elapsed, in
     printf("total size is %s  speedup is %s%s\n", comma_num(st->total_size, a),
            comma_num_frac2(speedup, b), dry_run ? " (DRY RUN)" : "");
 }
+
+/* --- items --- */
+
+const char *itemize_string(long iflags, uint32_t mode, int sending, char *buf)
+{
+    int i;
+
+    buf[0] = iflags & ITEM_LOCAL_CHANGE ? (iflags & ITEM_XNAME_FOLLOWS ? 'h' : 'c')
+             : !(iflags & ITEM_TRANSFER) ? '.' : sending ? '<' : '>';
+    if ((mode & WIRE_S_IFMT) == WIRE_S_IFLNK) {
+        buf[1] = 'L';
+        buf[3] = '.';
+    } else {
+        buf[1] = WIRE_ISDIR(mode) ? 'd' : WIRE_ISREG(mode) ? 'f'
+                 : ((mode & WIRE_S_IFMT) == WIRE_S_IFCHR || (mode & WIRE_S_IFMT) == WIRE_S_IFBLK) ? 'D'
+                 : 'S';
+        buf[3] = iflags & ITEM_REPORT_SIZE ? 's' : '.';
+    }
+    buf[2] = iflags & ITEM_REPORT_CHANGE ? 'c' : '.';
+    buf[4] = iflags & ITEM_REPORT_TIME ? 't' : '.';
+    buf[5] = iflags & ITEM_REPORT_PERMS ? 'p' : '.';
+    buf[6] = iflags & ITEM_REPORT_OWNER ? 'o' : '.';
+    buf[7] = iflags & ITEM_REPORT_GROUP ? 'g' : '.';
+    buf[8] = !(iflags & (ITEM_REPORT_ATIME | ITEM_REPORT_CRTIME)) ? '.'
+             : (iflags & ITEM_REPORT_ATIME) && (iflags & ITEM_REPORT_CRTIME) ? 'b'
+             : iflags & ITEM_REPORT_ATIME ? 'u' : 'n';
+    buf[9] = iflags & ITEM_REPORT_ACL ? 'a' : '.';
+    buf[10] = iflags & ITEM_REPORT_XATTR ? 'x' : '.';
+    buf[11] = '\0';
+
+    if (iflags & (ITEM_IS_NEW | ITEM_MISSING_DATA)) {
+        for (i = 2; buf[i]; i++)
+            buf[i] = iflags & ITEM_IS_NEW ? '+' : '?';
+    } else if (buf[0] == '.' || buf[0] == 'h' || buf[0] == 'c') {
+        /* Nothing to report: blanks instead of dots. */
+        for (i = 2; buf[i] == '.'; i++)
+            ;
+        if (!buf[i])
+            for (i = 2; buf[i]; i++)
+                buf[i] = ' ';
+    }
+    return buf;
+}
+
+int item_shown(int itemize, int verbose, long iflags, uint32_t mode)
+{
+    long significant = iflags & ITEM_SIGNIFICANT;
+
+    if (itemize && (significant || itemize > 1 || verbose > 1))
+        return 1;
+    return significant && ((iflags & ITEM_LOCAL_CHANGE) || WIRE_ISDIR(mode));
+}
+
+void print_item(int itemize, const char *name, uint32_t mode, long iflags, int sending)
+{
+    char buf[12];
+
+    if (itemize)
+        printf("%s ", itemize_string(iflags, mode, sending, buf));
+    printf("%s%s\n", name, WIRE_ISDIR(mode) ? "/" : "");
+}
+
+void print_deleted(int itemize, const char *name, int is_dir)
+{
+    printf("%s%s%s\n", itemize ? "*deleting   " : "deleting ", name, is_dir ? "/" : "");
+}

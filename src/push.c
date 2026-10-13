@@ -23,6 +23,8 @@
 #include <time.h>
 
 #include "push.h"
+#include "checksum.h"
+#include "digest.h"
 #include "match.h"
 #include "output.h"
 #include "progress.h"
@@ -80,10 +82,11 @@ static int flush(push_state *p)
     return 0;
 }
 
-static void log_name(push_state *p, const ars_file *f)
+/* Prints an item as rsync -v ("dir/" for directories) or -i does. */
+static void log_item(push_state *p, const ars_file *f, long iflags)
 {
-    if (p->o->verbose || p->o->progress)
-        printf("%s%s\n", flist_name(&p->fl, f), WIRE_ISDIR(f->mode) ? "/" : "");
+    if (p->o->verbose || p->o->progress || p->o->itemize)
+        print_item(p->o->itemize, flist_name(&p->fl, f), f->mode, iflags, 1);
 }
 
 static void show_progress(void *ctx, int64_t done)
@@ -158,11 +161,10 @@ static int handle_request(push_state *p, int *done)
     }
 
     if (!(iflags & ITEM_TRANSFER) || p->o->dry_run) {
-        /* Report changes as rsync does: directories that changed, and in
-         * a dry run whatever would be sent. */
-        if ((iflags & ITEM_TRANSFER)
-            || ((iflags & ITEM_SIGNIFICANT) && (WIRE_ISDIR(f->mode) || (iflags & ITEM_LOCAL_CHANGE))))
-            log_name(p, f);
+        /* Report changes as rsync does (see item_shown()), and in a dry
+         * run whatever would be sent. */
+        if ((iflags & ITEM_TRANSFER) || item_shown(p->o->itemize, p->o->verbose, iflags, f->mode))
+            log_item(p, f, iflags);
         echo_item(p, ndx, iflags, basis_type, xname, xlen);
         return RERR_OK;
     }
@@ -205,7 +207,7 @@ static int handle_request(push_state *p, int *done)
     w_int32(&p->s->out, sums.h.remainder);
 
     if (p->o->progress) {
-        log_name(p, f);
+        log_item(p, f, iflags);
         progress_start(&p->progress, f->size);
     }
     p->match.read_error = 0;
@@ -234,7 +236,7 @@ static int handle_request(push_state *p, int *done)
         progress_end(&p->progress, f->size, p->xfr_count, (long)(p->fl.count - ndx - 1),
                      (long)p->fl.count);
     else
-        log_name(p, f);
+        log_item(p, f, iflags);
     return RERR_OK;
 }
 
@@ -291,6 +293,29 @@ static int run_sender(push_state *p)
 }
 
 
+/* -c: every regular file's checksum, read now (as rsync does) since it goes
+ * in the list. One that can't be read gets zeros, and the error shows when
+ * it's sent. */
+static int sum_files(push_state *p)
+{
+    char local[FLIST_MAXPATH];
+    size_t i;
+
+    for (i = 0; i < p->fl.count; i++) {
+        const ars_file *f = &p->fl.files[i];
+
+        if (!f->mode || !WIRE_ISREG(f->mode))
+            continue;
+        scan_local_path(&p->fl, f, p->base, local, sizeof local);
+        if (file_sum(local, p->s->checksum_type, p->match.buf, MATCH_BUFSIZE,
+                     flist_sum(&p->fl, f)) == PLAT_EBREAK) {
+            fprintf(stderr, "\narsync: interrupted by user\n");
+            return RERR_SIGNAL;
+        }
+    }
+    return RERR_OK;
+}
+
 int client_push(ars_session *s, const ars_options *o, const char *src)
 {
     ars_flist_format fmt;
@@ -304,6 +329,9 @@ int client_push(ars_session *s, const ars_options *o, const char *src)
     p.s = s;
     p.o = o;
     flist_init(&p.fl);
+    /* With -c each regular file's checksum goes in the list. */
+    if (o->checksum)
+        p.fl.sum_len = DIGEST_LEN;
     ndx_state_init(&p.in_ndx);
     ndx_state_init(&p.out_ndx);
     /* An rsync receiver reads and writes independently, so our writes may
@@ -340,6 +368,8 @@ int client_push(ars_session *s, const ars_options *o, const char *src)
         goto out;
     }
     flist_sort_and_clean(&p.fl);
+    if (o->checksum && (rc = sum_files(&p)) != RERR_OK)
+        goto out;
     t1 = plat_millis();
     /* As rsync: never 0, which would mean "not measured". */
     p.st.flist_buildtime = t1 - t0 ? (int64_t)(t1 - t0) : 1;

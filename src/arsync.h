@@ -5,7 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define ARSYNC_VERSION "0.3.2"
+#define ARSYNC_VERSION "0.4.0"
 #define ARSYNC_DATE "13.10.2026"    /* release date for $VER (D.M.YYYY); bump with the version */
 
 #define ARS_PROTOCOL_VERSION 32

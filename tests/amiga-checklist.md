@@ -150,3 +150,19 @@ Restart `tools/test-daemon.sh` (the `test` module now also has `sub/numbers.txt`
 | 1 | `arsync -rt --stats rsync://127.0.0.1:8730/test/ RAM:s1` | No file names; a block from `Number of files: 5 (reg: 3, dir: 2)` to `Total bytes received`, then the usual `sent … received …` and `total size` lines. `Number of created files: 5`, `Number of regular files transferred: 3` |
 | 2 | Same again | `created` and `transferred` 0, `Matched data` and `Literal data` 0 |
 | 3 | `arsync -rt --stats Work:SomeDir/ rsync://127.0.0.1:8730/upload/s2/` | `File list generation time` is a plausible number of seconds for scanning SomeDir on this machine (not 0.000 for a large directory) |
+
+## M9 – what to transfer, `-i`, `--partial` (release 0.4.0)
+
+Restart `tools/test-daemon.sh` if it isn't running. Steps 1–5 use one copy, `RAM:m9`.
+
+| # | Command | Expect |
+|---|---------|--------|
+| 1 | `arsync -rt rsync://127.0.0.1:8730/test/ RAM:m9`, then `arsync -rti rsync://127.0.0.1:8730/test/ RAM:m9` | First run silent. Second prints nothing (nothing changed) |
+| 2 | `echo >RAM:m9/hello.txt changed` then `arsync -rti rsync://127.0.0.1:8730/test/ RAM:m9` | `>f.st...... hello.txt` (size and time differ); file back to the server's content |
+| 3 | `setdate RAM:m9/hello.txt 01-Jan-37` (a date after the server's), change its contents again, then `arsync -rtuvv rsync://127.0.0.1:8730/test/ RAM:m9` | `hello.txt is newer`; the file keeps your change |
+| 4 | `arsync -rtc -i rsync://127.0.0.1:8730/test/ RAM:m9` | `hello.txt` sent, on a line starting `>fc` (checksum differs); the other files are read and checksummed (the run is slower) but not sent |
+| 5 | `delete RAM:m9/sub ALL`, then `arsync -rtv --existing rsync://127.0.0.1:8730/test/ RAM:m9` | `sub` is **not** created again |
+| 6 | Pull a big file (tens of MB, on the daemon side) with `arsync -tP rsync://…/big RAM:big` and press **Ctrl-C** halfway | `$RC` 20; `RAM:big` exists, smaller than the original, no `.big.NNNNNN` temp file left |
+| 7 | Run 6 again without Ctrl-C | Finishes; `received` is roughly what was missing, not the whole file; the file matches the original |
+| 8 | Same as 6–7 pushing: `arsync -tP RAM:big rsync://127.0.0.1:8730/upload/` | After Ctrl-C the upload directory holds a partial `big`; the second run completes it, sending roughly the missing part |
+| 9 | `arsync --version` | `arsync 0.4.0` |

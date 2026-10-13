@@ -20,7 +20,7 @@ void flist_free(ars_flist *fl)
 int flist_add(ars_flist *fl, const char *path, uint32_t mode, int64_t size,
               int64_t mtime, uint32_t nsec)
 {
-    size_t len = strlen(path) + 1;
+    size_t len = strlen(path) + 1 + (size_t)fl->sum_len;
     ars_file *f;
 
     if (fl->count == fl->cap) {
@@ -53,7 +53,8 @@ int flist_add(ars_flist *fl, const char *path, uint32_t mode, int64_t size,
     f->mtime = mtime;
     f->mtime_nsec = nsec;
     f->xflags = 0;
-    memcpy(fl->names + fl->names_len, path, len);
+    memcpy(fl->names + fl->names_len, path, len - (size_t)fl->sum_len);
+    memset(fl->names + fl->names_len + len - fl->sum_len, 0, (size_t)fl->sum_len);
     fl->names_len += len;
     return WIRE_OK;
 }
@@ -278,8 +279,13 @@ int flist_recv(ars_flist *fl, ars_reader *r, const ars_flist_format *fmt,
     uint32_t mode = 0, xflags;
     int64_t mtime = 0, size;
     uint32_t nsec;
+    uint8_t sum[32];
     int rc;
 
+    if (fl->sum_len > (int)sizeof sum) {
+        snprintf(err, errlen, "file checksum too long");
+        return WIRE_EPROTO;
+    }
     for (;;) {
         if (fmt->varint_flags) {
             xflags = (uint32_t)r_varint(r);
@@ -325,6 +331,9 @@ int flist_recv(ars_flist *fl, ars_reader *r, const ars_flist_format *fmt,
         nsec = xflags & XMIT_MOD_NSEC ? (uint32_t)r_varint(r) : 0;
         if (!(xflags & XMIT_SAME_MODE))
             mode = (uint32_t)r_int32(r);
+        /* With -c each regular file comes with its checksum. */
+        if (fl->sum_len && WIRE_ISREG(mode))
+            r_bytes(r, sum, (size_t)fl->sum_len);
         if (r->err)
             return r->err;
 
@@ -343,6 +352,8 @@ int flist_recv(ars_flist *fl, ars_reader *r, const ars_flist_format *fmt,
         if ((rc = flist_add(fl, name, mode, size, mtime, nsec)) != WIRE_OK)
             return rc;
         fl->files[fl->count - 1].xflags = xflags;
+        if (fl->sum_len && WIRE_ISREG(mode))
+            memcpy(flist_sum(fl, &fl->files[fl->count - 1]), sum, (size_t)fl->sum_len);
     }
     if (r->err)
         return r->err;
@@ -416,6 +427,8 @@ void flist_send(const ars_flist *fl, ars_writer *w, const ars_flist_format *fmt,
             w_varint(w, (int32_t)f->mtime_nsec);
         if (!(xflags & XMIT_SAME_MODE))
             w_int32(w, (int32_t)f->mode);
+        if (fl->sum_len && WIRE_ISREG(f->mode))
+            w_bytes(w, flist_sum(fl, f), (size_t)fl->sum_len);
         last = name;
     }
 

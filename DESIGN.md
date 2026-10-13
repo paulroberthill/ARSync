@@ -283,6 +283,7 @@ When comparing local vs remote mtimes (quick check: size + mtime), allow a ±1 s
 | M6 | AmigaDOS mapping, Ctrl-C, progress/stats, first Amiga release | Real-hardware behaviour |
 | M7 | Push | Sender role |
 | M8 | `--delete`, excludes, `-z` | v2 features |
+| M9 | `-u`, `--existing`, `--ignore-existing`, `--size-only`, `-c`, `-i`, `--partial` | Skip rules, itemized output, resuming |
 
 M1–M3 can be tested on the Amiga early, since they need very little filesystem code.
 
@@ -453,3 +454,30 @@ M1–M3 can be tested on the Amiga early, since they need very little filesystem
 - **Differences:** `File list size` is the bytes read while the list arrived, as rsync
   measures it, so both vary a little with how reads fall. With `-vv`, rsync adds heap
   statistics, which arsync doesn't have.
+
+## 18. Choosing what to transfer, `-i`, `--partial` (M9, release 0.4.0)
+
+- **Skip rules (`generator.c`),** in rsync's order: `--existing` (nothing new: a missing
+  directory is skipped with its contents), then `--ignore-existing` (anything already
+  there, unless both are directories), then `-u` (the destination's copy is newer; equal
+  times don't count), then the quick check. With `-vv` they say why, as rsync does (`not
+  creating new file "x"`, `x exists`, `x is newer`).
+- **Quick check:** same size, then same time; with `--size-only` size alone; with `-c` the
+  whole-file checksum (the session's digest, unseeded) instead of the time. A file that
+  passes but has another time gets just its time set, and is reported (`.f..t......`
+  with `-i`), not transferred.
+- **`-c` checksums travel in the file list,** one per regular file after its mode. They
+  live in the name pool right after each name (`flist_sum()`), so `ars_file` doesn't grow
+  and sorting needn't move them. Pushing, every regular file is read while the list is
+  built; pulling, only files of the same size are read, as in rsync.
+- **`-i` (`output.c`):** rsync's `%i` string, built the same way (`+` for new, blanks for
+  no change, `*deleting`), and its rule for which items are shown: with `-i` any change,
+  with `-ii` (or `-i -vv`) everything; without `-i` only changed directories. Pushing,
+  `--log-format=%i` (or `%i%I`) goes to the server so it reports items as rsync's client
+  would get them.
+- **`--partial`:** when a transfer is cut short, a temp file that received new data
+  replaces the destination file, without the sender's time, so the next run sees it
+  differ and uses it as the delta basis (rsync's `cleanup_got_literal`). Pushing, the
+  server does this. `-P` now means `--partial --progress`, as in rsync.
+- **Differences:** at `-vv` some lines come in a different order than rsync's, since
+  rsync's generator and receiver are separate processes writing to the same terminal.

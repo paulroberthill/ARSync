@@ -175,6 +175,8 @@ int build_server_args(const ars_options *o, const ars_remote *rem, int push,
     buf[pos++] = '-';
     for (i = 0; i < o->verbose && i < 4; i++)
         buf[pos++] = 'v';
+    if (o->update)
+        buf[pos++] = 'u';
     if (o->dry_run)
         buf[pos++] = 'n';
     if (o->list_only && !o->recursive)
@@ -185,6 +187,9 @@ int build_server_args(const ars_options *o, const ars_remote *rem, int push,
         buf[pos++] = 't';
     if (o->recursive)
         buf[pos++] = 'r';
+    /* A sending server then puts each file's checksum in the list. */
+    if (o->checksum)
+        buf[pos++] = 'c';
     /* "zlibx" by name has no letter: rsync sends --new-compress alone. */
     if (o->compress && o->compress_choice != CPRES_ZLIBX)
         buf[pos++] = 'z';
@@ -201,6 +206,19 @@ int build_server_args(const ars_options *o, const ars_remote *rem, int push,
      * daemon's "max verbosity" lets it). */
     if (push && o->stats)
         args[n++] = "--stats";
+    /* The rest only matter to a receiving server, which decides what to
+     * transfer (rsync sends them only then, too). */
+    if (push && o->size_only)
+        args[n++] = "--size-only";
+    if (push && o->partial)
+        args[n++] = "--partial";
+    if (push && o->ignore_existing)
+        args[n++] = "--ignore-existing";
+    if (push && o->existing)
+        args[n++] = "--existing";
+    /* -ii makes it report unchanged items too. */
+    if (push && o->itemize)
+        args[n++] = o->itemize > 1 ? "--log-format=%i%I" : "--log-format=%i";
     if (o->compress && o->compress_choice == CPRES_ZLIB)
         args[n++] = "--old-compress";
     else if (o->compress && o->compress_choice == CPRES_ZLIBX)
@@ -359,11 +377,11 @@ static int on_message(void *ctx, int tag, const uint8_t *payload, size_t len)
     case MSG_DELETED:
         /* A receiving server deleted something (--delete); a trailing NUL
          * marks a directory. */
-        if (s->verbose && len > 0) {
+        if (s->log_deletions && len > 0) {
             int dir = len > 1 && payload[len - 1] == '\0';
 
-            printf("deleting %.*s%s\n", (int)(dir ? len - 1 : len), (const char *)payload,
-                   dir ? "/" : "");
+            printf("%s%.*s%s\n", s->log_deletions > 1 ? "*deleting   " : "deleting ",
+                   (int)(dir ? len - 1 : len), (const char *)payload, dir ? "/" : "");
         }
         return WIRE_OK;
     case MSG_LOG:
@@ -431,6 +449,8 @@ int session_setup_protocol(ars_session *s, const ars_options *o, int push)
      * older protocol-30/31 ones always use md5. */
     s->checksum_type = DIGEST_MD5;
     s->verbose = o->verbose;
+    /* rsync's client logs deletions with -v, or whenever it logs names. */
+    s->log_deletions = o->itemize ? 2 : o->verbose || o->progress;
     /* Compression: as chosen with --compress-choice, negotiated, or (from
      * servers too old to negotiate) zlib. */
     s->compression = !o->compress ? CPRES_NONE

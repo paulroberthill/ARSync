@@ -62,6 +62,28 @@ static int make_tmpname(pull_state *p, const char *local)
     return -1;
 }
 
+/* --partial: a transfer was cut short (Ctrl-C, lost connection). As rsync
+ * does, if any new data had arrived, what was received replaces the file,
+ * without the sender's time, so the next run uses it as the basis. */
+void recv_keep_partial(pull_state *p)
+{
+    char local[FLIST_MAXPATH];
+    plat_fileinfo st;
+    int rc;
+
+    basis_close(p);
+    if (!p->tmp[0] || !p->got_literal || p->cur_ndx < 0)
+        return;
+    pull_local_path(p, (size_t)p->cur_ndx, local, sizeof local);
+    plat_new_file_perms(p->tmp, p->fl.files[p->cur_ndx].mode,
+                        plat_stat(local, &st) == PLAT_OK && st.type == PLAT_T_FILE ? local : NULL);
+    if ((rc = plat_rename(p->tmp, local)) != PLAT_OK) {
+        fprintf(stderr, "arsync: rename %s -> %s: %s\n", p->tmp, local, plat_strerror(rc));
+        return;
+    }
+    p->tmp[0] = '\0';
+}
+
 void recv_cleanup(pull_state *p)
 {
     basis_close(p);
@@ -71,15 +93,14 @@ void recv_cleanup(pull_state *p)
     }
 }
 
-/* Prints a file's name as rsync -v does ("dir/" for directories). */
-static void log_name(pull_state *p, size_t ndx)
+/* Prints an item as rsync -v ("dir/" for directories) or -i does. */
+static void log_item(pull_state *p, size_t ndx, long iflags)
 {
     const ars_file *f = &p->fl.files[ndx];
-    const char *name = flist_name(&p->fl, f);
 
-    if (!p->o->verbose && !p->o->progress)
+    if (!p->o->verbose && !p->o->progress && !p->o->itemize)
         return;
-    printf("%s%s\n", name, WIRE_ISDIR(f->mode) ? "/" : "");
+    print_item(p->o->itemize, flist_name(&p->fl, f), f->mode, iflags, 0);
 }
 
 static void basis_close(pull_state *p)
@@ -170,6 +191,7 @@ static int read_tokens(pull_state *p, const ars_sum_head *sh, plat_file *f,
             continue;
         }
         p->st.literal += n;
+        p->got_literal = 1;
         digest_update(sum, data, (size_t)n);
         if (f && !write_failed && plat_write(f, data, (size_t)n) != PLAT_OK)
             write_failed = 1;
@@ -197,7 +219,7 @@ static int read_sum_head(pull_state *p, ars_sum_head *sh)
     return RERR_OK;
 }
 
-static int receive_file(pull_state *p, size_t ndx)
+static int receive_file(pull_state *p, size_t ndx, uint16_t iflags)
 {
     const ars_file *fe = &p->fl.files[ndx];
     char local[FLIST_MAXPATH];
@@ -212,6 +234,7 @@ static int receive_file(pull_state *p, size_t ndx)
     pull_local_path(p, ndx, local, sizeof local);
     if ((rc = read_sum_head(p, &sh)) != RERR_OK)
         return rc;
+    p->cur_ndx = (long)ndx;
 
     /* The checksums we sent describe the file now at the destination;
      * that's the old file the server's block references point into. */
@@ -230,9 +253,10 @@ static int receive_file(pull_state *p, size_t ndx)
 
     /* With --progress the name comes first, then the progress line. */
     if (p->o->progress) {
-        printf("%s\n", flist_name(&p->fl, fe));
+        log_item(p, ndx, iflags);
         progress_start(&p->progress, fe->size);
     }
+    p->got_literal = 0;
 
     /* Even without somewhere to write it, the data has to be read. */
     digest_init(&sum, p->s->checksum_type);
@@ -291,7 +315,7 @@ static int receive_file(pull_state *p, size_t ndx)
     }
     p->tmp[0] = '\0';
     if (!p->o->progress)
-        log_name(p, ndx);
+        log_item(p, ndx, iflags);
     return RERR_OK;
 }
 
@@ -353,11 +377,13 @@ int recv_reply(pull_state *p, int until_done, int *done)
     if (!(iflags & ITEM_TRANSFER)) {
         if (iflags & ITEM_IS_NEW)
             stats_count(p->st.created, f->mode);
-        /* Like rsync: report directories that changed (created, new time);
-         * with -vv also say which files were already up to date. */
-        if ((iflags & ITEM_SIGNIFICANT) && (WIRE_ISDIR(f->mode) || (iflags & ITEM_LOCAL_CHANGE)))
-            log_name(p, (size_t)ndx);
-        else if (!(iflags & ITEM_SIGNIFICANT) && p->o->verbose > 1)
+        /* Like rsync: report directories that changed (created, new time),
+         * with -i any change; with -vv (and no -i) say which files were
+         * already up to date. */
+        if (item_shown(p->o->itemize, p->o->verbose, iflags, f->mode))
+            log_item(p, (size_t)ndx, iflags);
+        else if (!(iflags & ITEM_SIGNIFICANT) && p->o->verbose > 1 && !p->o->itemize
+                 && !WIRE_ISDIR(f->mode))
             printf("%s is uptodate\n", flist_name(&p->fl, f));
         return RERR_OK;
     }
@@ -366,8 +392,8 @@ int recv_reply(pull_state *p, int until_done, int *done)
     p->st.xferred++;
     p->st.transferred_size += f->size;
     if (p->o->dry_run) {
-        log_name(p, (size_t)ndx);
+        log_item(p, (size_t)ndx, iflags);
         return RERR_OK;
     }
-    return receive_file(p, (size_t)ndx);
+    return receive_file(p, (size_t)ndx, iflags);
 }

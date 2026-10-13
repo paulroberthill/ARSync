@@ -85,6 +85,10 @@ motd file = $WORK/motd
 [ioerr]
     path = $WORK/ioerr
 
+[huge]
+    path = $WORK/huge
+    comment = one big file, for --partial
+
 [private]
     path = $WORK/pub
     comment = needs a password
@@ -786,6 +790,88 @@ SORTED=1
 pushcase "push -v --stats --delete, server reports deletions" times "$SEEDP; $PEXTRA" -rtv --delete --stats "$DF/" @
 SORTED=
 UPMOD=
+
+# --- -u, --existing, --ignore-existing, --size-only, -c, -i, --partial (M9) --
+
+# Against a copy where keep.me is newer (2030), big.txt older and changed,
+# and docs/ missing.
+M9CHG="echo NEWER > dest/keep.me; echo x >> dest/big.txt; rm -r dest/docs; $AGE; touch -d 2030-01-01 dest/keep.me"
+# big.txt: same size and time, different content (only -c sees it);
+# keep.me: same content, different time (--size-only and -c fix the time).
+M9SAME="printf XXXX | dd of=dest/big.txt conv=notrunc 2>/dev/null; touch -r '$DF/big.txt' dest/big.txt; touch -d 2010-01-01 dest/keep.me"
+for v in "" -v -i -ii; do
+    pull "pull -u $v" times "$SEEDD; $M9CHG" -rtu $v "$DEL/" @
+    pull "pull --existing $v" times "$SEEDD; $M9CHG" -rt --existing $v "$DEL/" @
+    pull "pull --ignore-existing $v" times "$SEEDD; $M9CHG" -rt --ignore-existing $v "$DEL/" @
+    pull "pull --size-only $v" times "$SEEDD; $M9SAME" -rt --size-only $v "$DEL/" @
+    pull "pull -c $v" times "$SEEDD; $M9SAME" -rtc $v "$DEL/" @
+    pushcase "push -u $v" times "$SEEDP; $M9CHG" -rtu $v "$DF/" @
+    pushcase "push --existing $v" times "$SEEDP; $M9CHG" -rt --existing $v "$DF/" @
+    pushcase "push --ignore-existing $v" times "$SEEDP; $M9CHG" -rt --ignore-existing $v "$DF/" @
+    pushcase "push --size-only $v" times "$SEEDP; $M9SAME" -rt --size-only $v "$DF/" @
+    pushcase "push -c $v" times "$SEEDP; $M9SAME" -rtc $v "$DF/" @
+done
+pull "pull -i (new)" times "" -rti "$DEL/" @
+pull "pull -i, changed" times "$SEEDD; $M9CHG" -rti "$DEL/" @
+pull "pull -c -n -i" times "$SEEDD; $M9SAME" -rtcni "$DEL/" @
+pull "pull -c --stats" times "$SEEDD; $M9SAME" -rtc --stats "$DEL/" @
+pull "pull -c without -t" notimes "$SEEDD; $M9SAME" -rcv "$DEL/" @
+pull "pull --existing into a new dir" times "" -rtv --existing "$DEL/" @
+pushcase "push -i (new)" times "" -rti "$DF/" @
+pushcase "push -c -n -i" times "$SEEDP; $M9SAME" -rtcni "$DF/" @
+SORTED=1
+pull "pull -i --delete" times "$SEEDD; $EXTRA" -rti --delete "$DEL/" @
+pushcase "push -i --delete" times "$SEEDP; $PEXTRA" -rti --delete "$DF/" @
+SORTED=
+
+# --partial: Ctrl-C (SIGINT) once over a megabyte of the big file has
+# arrived in the temp file; the part received must stay, and -P must then
+# finish it as a delta (receiving much less than the whole file).
+mkdir -p "$WORK/huge" "$WORK/upload/part"
+head -c 150000000 /dev/urandom > "$WORK/huge/huge"
+HUGE=150000000
+# interrupt TEMPDIR CMD... : runs CMD, interrupts it as above; sets irc.
+interrupt() {
+    tdir=$1
+    shift
+    "$@" > "$WORK/got.out" 2> "$WORK/got.err" &
+    ipid=$!
+    for i in $(seq 400); do
+        [ -n "$(find "$tdir" -name '.huge.*' -size +1024k 2>/dev/null)" ] && break
+        sleep 0.05
+    done
+    kill -INT "$ipid" 2>/dev/null
+    wait "$ipid"
+    irc=$?
+}
+size_of() { wc -c < "$1" 2>/dev/null || echo 0; }
+
+rm -rf "$WORK/part"
+mkdir -p "$WORK/part"
+interrupt "$WORK/part" "$ARSYNC" -t --partial "$URL/huge/huge" "$WORK/part/huge"
+psz=$(size_of "$WORK/part/huge")
+check "pull --partial keeps the part received (exit $irc, kept $psz bytes)" \
+    [ "$irc" = 20 ] && [ "$psz" -gt 1000000 ] && [ "$psz" -lt "$HUGE" ] \
+    && [ -z "$(find "$WORK/part" -name '.huge.*')" ]
+rr=$("$ARSYNC" -tvP "$URL/huge/huge" "$WORK/part/huge" | sed -n 's/.*received \([0-9,]*\) bytes.*/\1/p' | tr -d ,)
+check "pull -P resumes it (received ${rr:-?} bytes)" \
+    cmp -s "$WORK/huge/huge" "$WORK/part/huge" && [ -n "$rr" ] && [ "$rr" -le $((HUGE - psz + 1000000)) ]
+
+rm -rf "$WORK/part"
+mkdir -p "$WORK/part"
+interrupt "$WORK/part" "$ARSYNC" -t "$URL/huge/huge" "$WORK/part/huge"
+check "pull without --partial keeps nothing (exit $irc)" \
+    [ "$irc" = 20 ] && [ -z "$(ls -A "$WORK/part")" ]
+
+interrupt "$WORK/upload/part" "$ARSYNC" -t --partial "$WORK/huge/huge" "$URL/upload/part/"
+sleep 1    # the server finishes up on its own
+psz=$(size_of "$WORK/upload/part/huge")
+check "push --partial: the server keeps the part sent (exit $irc, kept $psz bytes)" \
+    [ "$irc" = 20 ] && [ "$psz" -gt 1000000 ] && [ "$psz" -lt "$HUGE" ]
+rs=$("$ARSYNC" -tvP "$WORK/huge/huge" "$URL/upload/part/" | sed -n 's/^sent \([0-9,]*\) bytes.*/\1/p' | tr -d ,)
+check "push -P resumes it (sent ${rs:-?} bytes)" \
+    cmp -s "$WORK/huge/huge" "$WORK/upload/part/huge" && [ -n "$rs" ] && [ "$rs" -le $((HUGE - psz + 1000000)) ]
+rm -rf "$WORK/part" "$WORK/upload/part" "$WORK/huge/huge"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

@@ -46,7 +46,15 @@ its contents too.
 | `-a`, `--archive` | same as `-rt` here (links, permissions and owners aren't supported) |
 | `-n`, `--dry-run` | show what would be transferred |
 | `-v`, `--verbose` | list transferred files and a summary; `-vv` for more |
-| `-P`, `--progress` | show progress for each file |
+| `--progress` | show progress for each file |
+| `--partial` | if a transfer is cut short (Ctrl-C, lost connection), keep what arrived; the next run then only fetches the rest |
+| `-P` | same as `--partial --progress` |
+| `-i`, `--itemize-changes` | list each change with rsync's change codes (`>f.st...... name`); `-ii` lists unchanged items too |
+| `-u`, `--update` | don't replace files that are newer on the destination |
+| `--existing` | only update files that already exist on the destination; create nothing new |
+| `--ignore-existing` | only create new files; leave existing ones alone |
+| `--size-only` | treat files of the same size as up to date, whatever their times |
+| `-c`, `--checksum` | compare files by a checksum of their contents instead of size and time (reads every file on both sides, so slow on a 68k, but finds changes that kept size and time) |
 | `--stats` | show rsync's transfer statistics at the end (files, created, deleted, literal/matched data, bytes) |
 | `-W`, `--whole-file` | don't use delta transfer (can be quicker with a slow CPU and a fast network) |
 | `-z`, `--compress` | compress file data in transit (worth it on slow links; costs CPU) |
