@@ -11,7 +11,7 @@
 #include "url.h"
 
 /* AmigaOS "version" command reads this. */
-const char ars_version_tag[] = "$VER: arsync " ARSYNC_VERSION " (12.10.2026)";
+const char ars_version_tag[] = "$VER: arsync " ARSYNC_VERSION " (" ARSYNC_DATE ")";
 
 static void usage(FILE *out)
 {
