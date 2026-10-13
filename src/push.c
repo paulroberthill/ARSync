@@ -123,7 +123,7 @@ static int handle_request(push_state *p, int *done)
     int32_t ndx;
 
     *done = 0;
-    ndx = r_ndx(in, &p->in_ndx);
+    ndx = r_ndx_skip_stats(in, &p->in_ndx);
     if (in->err)
         return session_stream_failure(p->s, "reading request");
     if (ndx == NDX_DONE) {
@@ -226,7 +226,7 @@ static int handle_request(push_state *p, int *done)
 
 static int expect_done(push_state *p, const char *when)
 {
-    int32_t ndx = r_ndx(&p->s->in, &p->in_ndx);
+    int32_t ndx = r_ndx_skip_stats(&p->s->in, &p->in_ndx);
 
     if (p->s->in.err)
         return session_stream_failure(p->s, when);

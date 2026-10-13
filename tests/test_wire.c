@@ -59,6 +59,51 @@ static void test_reference_vectors(void)
     }
 }
 
+/* Deletion counts from a receiving server (NDX_DEL_STATS and five
+ * varints) are skipped wherever a request, reply or goodbye is read. */
+static void test_ndx_skip_stats(void)
+{
+    static const uint8_t first_del_stats[] = { 0xFF, 0x02 };   /* -3 after -1 */
+    ars_membuf mb;
+    ars_reader r;
+    ars_writer w;
+    ars_ndx_state ws, rs;
+    int i;
+
+    membuf_init(&mb);
+    membuf_writer(&w, &mb);
+    ndx_state_init(&ws);
+    w_ndx(&w, &ws, NDX_DEL_STATS);
+    CHECK_EQ(mb.len, sizeof first_del_stats);
+    CHECK_MEM(mb.data, first_del_stats, sizeof first_del_stats);
+    for (i = 0; i < 5; i++)
+        w_varint(&w, i == 0 ? 123456 : i);
+    w_ndx(&w, &ws, 7);
+    w_ndx(&w, &ws, NDX_DEL_STATS);
+    for (i = 0; i < 5; i++)
+        w_varint(&w, 0);
+    w_ndx(&w, &ws, NDX_DEL_STATS);
+    for (i = 0; i < 5; i++)
+        w_varint(&w, 1);
+    w_ndx(&w, &ws, NDX_DONE);
+
+    membuf_reader(&r, &mb);
+    ndx_state_init(&rs);
+    CHECK_EQ(r_ndx_skip_stats(&r, &rs), 7);
+    CHECK_EQ(r_ndx_skip_stats(&r, &rs), NDX_DONE);
+    CHECK_EQ(r.err, WIRE_OK);
+    CHECK_EQ(mb.pos, mb.len);
+
+    /* Cut off inside the counts: an error, not a loop. */
+    mb.pos = 0;
+    mb.len = 4;
+    membuf_reader(&r, &mb);
+    ndx_state_init(&rs);
+    r_ndx_skip_stats(&r, &rs);
+    CHECK(r.err != WIRE_OK);
+    membuf_free(&mb);
+}
+
 static void test_fixed_values(void)
 {
     static const uint8_t int_bytes[] = { 0x78, 0x56, 0x34, 0x12 };
@@ -320,6 +365,7 @@ static void test_mux(void)
 void test_wire(void)
 {
     test_reference_vectors();
+    test_ndx_skip_stats();
     test_fixed_values();
     test_vstrings();
     test_sticky_errors();

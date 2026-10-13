@@ -61,6 +61,7 @@ void w_vstring(ars_writer *w, const char *s, size_t len);
  * Each direction of a connection keeps its own state. */
 
 #define NDX_DONE (-1)
+#define NDX_DEL_STATS (-3)      /* a receiver's deletion counts follow */
 
 typedef struct ars_ndx_state {
     int32_t prev_positive;
@@ -70,6 +71,11 @@ typedef struct ars_ndx_state {
 void ndx_state_init(ars_ndx_state *st);
 void w_ndx(ars_writer *w, ars_ndx_state *st, int32_t ndx);
 int32_t r_ndx(ars_reader *r, ars_ndx_state *st);
+/* r_ndx() for requests, replies and goodbyes: skips any NDX_DEL_STATS and
+ * the five varint counts after it, as rsync's read_ndx_and_attrs() does.
+ * A receiving server sends them with --delete when its stats level is 2
+ * or more (e.g. after --stats). */
+int32_t r_ndx_skip_stats(ars_reader *r, ars_ndx_state *st);
 
 /* --- growable memory buffer usable as both source and sink --- */
 

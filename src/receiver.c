@@ -319,7 +319,7 @@ int recv_reply(pull_state *p, int until_done, int *done)
             return stream_failure(p, "reading reply");
     }
 
-    ndx = r_ndx(in, &p->recv_ndx);
+    ndx = r_ndx_skip_stats(in, &p->recv_ndx);
     if (in->err)
         return stream_failure(p, "reading reply");
     if (ndx == NDX_DONE) {

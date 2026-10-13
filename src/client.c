@@ -118,7 +118,7 @@ static int replies_until_done(pull_state *p)
 
 static int expect_done(pull_state *p, const char *when)
 {
-    int32_t ndx = r_ndx(&p->s->in, &p->recv_ndx);
+    int32_t ndx = r_ndx_skip_stats(&p->s->in, &p->recv_ndx);
 
     if (p->s->in.err)
         return session_stream_failure(p->s, when);

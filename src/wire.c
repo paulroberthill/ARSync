@@ -344,6 +344,18 @@ int32_t r_ndx(ars_reader *r, ars_ndx_state *st)
     return negative ? -num : num;
 }
 
+int32_t r_ndx_skip_stats(ars_reader *r, ars_ndx_state *st)
+{
+    int32_t ndx;
+    int i;
+
+    while ((ndx = r_ndx(r, st)) == NDX_DEL_STATS && !r->err) {
+        for (i = 0; i < 5; i++)
+            r_varint(r);
+    }
+    return ndx;
+}
+
 /* ------------------------------------------------------------------ */
 /* Memory buffers                                                      */
 

@@ -418,7 +418,12 @@ M1–M3 can be tested on the Amiga early, since they need very little filesystem
   stays. Nothing is deleted if either side reported an I/O error building the list. Name
   lookups fold case on case-insensitive volumes, so `README` doesn't delete `Readme`.
 - **`--delete` when pushing:** the server deletes; arsync only relays its `deleting`
-  lines.
+  lines. A receiving server whose stats level is 2 or more also sends its
+  deletion counts (`NDX_DEL_STATS`, -3, then five varints) before the end of the
+  transfer; arsync skips them wherever it reads an index, as rsync does. A stock daemon
+  only does this when the client sent `--stats` (which arsync doesn't) *and* the module's
+  `max verbosity` is above rsync's top level, but some servers do it anyway (found in
+  testing: "unexpected index -3 in goodbye").
 - **`-z` (`token.c`):** both of rsync's methods. `zlibx` is plain deflate of the literal
   data; `zlib` also feeds matched blocks into the compressor's history (and, receiving,
   into the decompressor's via `inflate()` on a stored block), so both ends must keep
