@@ -142,3 +142,11 @@ Restart `tools/test-daemon.sh` (the `test` module now also has `sub/numbers.txt`
 | 8 | `arsync -rtvz Work:SomeDir/ rsync://127.0.0.1:8730/upload/z/` with a few text files and an `.lha` in SomeDir | Arrives intact on Linux (`diff -r`); `sent` well under the total for the text files |
 | 9 | Delete one file from `Work:SomeDir`, run 8 again with `--delete` | `deleting FILE` (printed for the server); gone from the upload directory |
 | 10 | `arsync --version` | `arsync 0.3.0` |
+
+## `--stats` (release 0.3.2)
+
+| # | Command | Expect |
+|---|---------|--------|
+| 1 | `arsync -rt --stats rsync://127.0.0.1:8730/test/ RAM:s1` | No file names; a block from `Number of files: 5 (reg: 3, dir: 2)` to `Total bytes received`, then the usual `sent … received …` and `total size` lines. `Number of created files: 5`, `Number of regular files transferred: 3` |
+| 2 | Same again | `created` and `transferred` 0, `Matched data` and `Literal data` 0 |
+| 3 | `arsync -rt --stats Work:SomeDir/ rsync://127.0.0.1:8730/upload/s2/` | `File list generation time` is a plausible number of seconds for scanning SomeDir on this machine (not 0.000 for a large directory) |

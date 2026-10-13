@@ -37,6 +37,9 @@ typedef struct push_state {
     ars_ndx_state in_ndx, out_ndx;
     int io_error;
     long xfr_count;
+    int redoing;                /* in phase 2 (files sent once already) */
+    ars_stats st;               /* for -v and --stats */
+    int32_t del[5];             /* the server's deletion counts, if sent */
     ars_progress progress;
     ars_match_ctx match;
     ars_token_tx tx;
@@ -123,7 +126,7 @@ static int handle_request(push_state *p, int *done)
     int32_t ndx;
 
     *done = 0;
-    ndx = r_ndx_skip_stats(in, &p->in_ndx);
+    ndx = r_ndx_skip_stats(in, &p->in_ndx, p->del);
     if (in->err)
         return session_stream_failure(p->s, "reading request");
     if (ndx == NDX_DONE) {
@@ -142,6 +145,17 @@ static int handle_request(push_state *p, int *done)
         xlen = r_vstring(in, xname, sizeof xname);
     if (in->err)
         return session_stream_failure(p->s, "reading request");
+
+    /* Counted where rsync's sender counts them. */
+    if (!(iflags & ITEM_TRANSFER)) {
+        if (iflags & ITEM_IS_NEW)
+            stats_count(p->st.created, f->mode);
+    } else {
+        if (!p->redoing && (iflags & ITEM_IS_NEW))
+            p->st.created[STAT_ALL]++;
+        p->st.xferred++;
+        p->st.transferred_size += f->size;
+    }
 
     if (!(iflags & ITEM_TRANSFER) || p->o->dry_run) {
         /* Report changes as rsync does: directories that changed, and in
@@ -226,7 +240,7 @@ static int handle_request(push_state *p, int *done)
 
 static int expect_done(push_state *p, const char *when)
 {
-    int32_t ndx = r_ndx_skip_stats(&p->s->in, &p->in_ndx);
+    int32_t ndx = r_ndx_skip_stats(&p->s->in, &p->in_ndx, p->del);
 
     if (p->s->in.err)
         return session_stream_failure(p->s, when);
@@ -249,6 +263,7 @@ static int run_sender(push_state *p)
             continue;
         if (++phase > 2)
             break;
+        p->redoing = 1;
         w_ndx(&p->s->out, &p->out_ndx, NDX_DONE);
         if (flush(p) < 0)
             return session_stream_failure(p->s, "ending a phase");
@@ -275,27 +290,14 @@ static int run_sender(push_state *p)
     return RERR_OK;
 }
 
-static void print_summary(push_state *p, int64_t total_size)
-{
-    char sent[32], recvd[32], rate[40], size[32];
-    int64_t out = p->s->conn.bytes_out, in = p->s->conn.bytes_in, total = out + in;
-    long elapsed = (long)(time(NULL) - p->s->started);
-    int64_t speedup;
-
-    comma_num_frac2((total * 200 + elapsed) / (1 + 2 * (int64_t)elapsed), rate);
-    printf("\nsent %s bytes  received %s bytes  %s bytes/sec\n",
-           comma_num(out, sent), comma_num(in, recvd), rate);
-    speedup = total ? (total_size * 100 + total / 2) / total : 0;
-    printf("total size is %s  speedup is %s%s\n", comma_num(total_size, size),
-           comma_num_frac2(speedup, rate), p->o->dry_run ? " (DRY RUN)" : "");
-}
 
 int client_push(ars_session *s, const ars_options *o, const char *src)
 {
     ars_flist_format fmt;
     push_state p;
-    int64_t total_size = 0;
+    uint32_t t0, t1;
     size_t i;
+    int k;
     int rc, io_error, show_flist;
 
     memset(&p, 0, sizeof p);
@@ -326,6 +328,7 @@ int client_push(ars_session *s, const ars_options *o, const char *src)
     show_flist = (o->verbose || o->progress) && o->recursive;
     if (show_flist)
         printf("building file list ... ");
+    t0 = plat_millis();
     if (scan_source(&p.fl, src, o->recursive, &o->filters, p.base, sizeof p.base, &p.io_error) != WIRE_OK) {
         fprintf(stderr, "arsync: out of memory building file list\n");
         rc = RERR_MALLOC;
@@ -337,6 +340,9 @@ int client_push(ars_session *s, const ars_options *o, const char *src)
         goto out;
     }
     flist_sort_and_clean(&p.fl);
+    t1 = plat_millis();
+    /* As rsync: never 0, which would mean "not measured". */
+    p.st.flist_buildtime = t1 - t0 ? (int64_t)(t1 - t0) : 1;
     if (show_flist) {
         if (o->progress)
             printf("%lu file%sto consider\n", (unsigned long)p.fl.count, p.fl.count == 1 ? " " : "s ");
@@ -345,9 +351,11 @@ int client_push(ars_session *s, const ars_options *o, const char *src)
     }
     /* rsync's total counts everything but directories (a symlink's size
      * is its target's length). */
-    for (i = 0; i < p.fl.count; i++)
+    for (i = 0; i < p.fl.count; i++) {
         if (p.fl.files[i].mode && !WIRE_ISDIR(p.fl.files[i].mode))
-            total_size += p.fl.files[i].size;
+            p.st.total_size += p.fl.files[i].size;
+        stats_count(p.st.num_files, p.fl.files[i].mode);
+    }
 
     fmt.varint_flags = (s->compat_flags & CF_VARINT_FLIST_FLAGS) != 0;
     fmt.safe_flist = (s->compat_flags & CF_SAFE_FLIST) || s->protocol >= 31;
@@ -356,11 +364,22 @@ int client_push(ars_session *s, const ars_options *o, const char *src)
         rc = session_stream_failure(s, "sending file list");
         goto out;
     }
+    p.st.flist_xfertime = (int64_t)(plat_millis() - t1);
+    p.st.flist_size = s->conn.bytes_out;
 
     if ((rc = run_sender(&p)) != RERR_OK)
         goto out;
-    if (o->verbose)
-        print_summary(&p, total_size);
+    if (o->verbose || o->stats) {
+        p.st.sent = s->conn.bytes_out;
+        p.st.received = s->conn.bytes_in;
+        p.st.literal = p.match.literal;
+        p.st.matched = p.match.matched;
+        for (k = 0; k < 5; k++)
+            p.st.deleted[STAT_ALL] += p.del[k];
+        for (k = 1; k < 5; k++)
+            p.st.deleted[k] = p.del[k];
+        print_summary(&p.st, o->stats, s->protocol, (long)(time(NULL) - s->started), o->dry_run);
+    }
 
     io_error = p.io_error | s->remote_io_error | (s->saw_xfer_error ? IOERR_GENERAL : 0);
     rc = RERR_OK;

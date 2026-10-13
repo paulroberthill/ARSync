@@ -33,16 +33,6 @@
 #include "plat.h"
 #include "pull.h"
 
-/* The server's byte counts, already turned round to our point of view: it
- * sends what it read (= what we sent) first, then what it wrote. */
-typedef struct server_stats {
-    int64_t sent;
-    int64_t received;
-    int64_t total_size;
-    int64_t flist_buildtime;
-    int64_t flist_xfertime;
-} server_stats;
-
 /* --- shared helpers (pull.h) --- */
 
 /* Joins an AmigaDOS or POSIX directory and a relative name. */
@@ -118,7 +108,7 @@ static int replies_until_done(pull_state *p)
 
 static int expect_done(pull_state *p, const char *when)
 {
-    int32_t ndx = r_ndx_skip_stats(&p->s->in, &p->recv_ndx);
+    int32_t ndx = r_ndx_skip_stats(&p->s->in, &p->recv_ndx, NULL);
 
     if (p->s->in.err)
         return session_stream_failure(p->s, when);
@@ -129,7 +119,7 @@ static int expect_done(pull_state *p, const char *when)
     return RERR_OK;
 }
 
-static int run_phases(pull_state *p, server_stats *stats)
+static int run_phases(pull_state *p)
 {
     ars_reader *in = &p->s->in;
     ars_writer *out = &p->s->out;
@@ -168,19 +158,35 @@ static int run_phases(pull_state *p, server_stats *stats)
         gen_redo(p, p->redo[i]);
     w_ndx(out, &p->gen_ndx, NDX_DONE);
     w_ndx(out, &p->gen_ndx, NDX_DONE);
-    if (p->s->protocol >= 31)
+    if (p->s->protocol >= 31) {
+        /* rsync's generator reports its deletions with --stats; the server
+         * sends them back to the receiver (r_ndx_skip_stats() skips them,
+         * as we counted them ourselves). */
+        if (p->o->stats && p->o->delete_mode && !p->listing) {
+            w_ndx(out, &p->gen_ndx, NDX_DEL_STATS);
+            w_varint(out, (int32_t)(p->st.deleted[STAT_ALL] - p->st.deleted[STAT_DIR]
+                                    - p->st.deleted[STAT_LINK] - p->st.deleted[STAT_DEV]
+                                    - p->st.deleted[STAT_SPECIAL]));
+            w_varint(out, (int32_t)p->st.deleted[STAT_DIR]);
+            w_varint(out, (int32_t)p->st.deleted[STAT_LINK]);
+            w_varint(out, (int32_t)p->st.deleted[STAT_DEV]);
+            w_varint(out, (int32_t)p->st.deleted[STAT_SPECIAL]);
+        }
         w_ndx(out, &p->gen_ndx, NDX_DONE);
+    }
     if (flush(p) < 0)
         return session_stream_failure(p->s, "ending phase 2");
     if ((rc = replies_until_done(p)) != RERR_OK
         || (rc = expect_done(p, "at end of transfer")) != RERR_OK)
         return rc;
 
-    stats->sent = r_varlong(in, 3);
-    stats->received = r_varlong(in, 3);
-    stats->total_size = r_varlong(in, 3);
-    stats->flist_buildtime = r_varlong(in, 3);
-    stats->flist_xfertime = r_varlong(in, 3);
+    /* The server's counts, turned round to our point of view: it sends
+     * what it read (= what we sent) first, then what it wrote. */
+    p->st.sent = r_varlong(in, 3);
+    p->st.received = r_varlong(in, 3);
+    p->st.total_size = r_varlong(in, 3);
+    p->st.flist_buildtime = r_varlong(in, 3);
+    p->st.flist_xfertime = r_varlong(in, 3);
     if (in->err)
         return session_stream_failure(p->s, "reading statistics");
 
@@ -311,21 +317,10 @@ static void set_dir_times(pull_state *p)
 
 /* --- reporting --- */
 
-static void print_summary(pull_state *p, const server_stats *stats)
+static void show_summary(pull_state *p)
 {
-    char sent[32], recvd[32], rate[40], size[32];
-    int64_t total = stats->sent + stats->received;
-    long elapsed = (long)(time(NULL) - p->s->started);
-    int64_t speedup;
-
-    /* rsync's rate is bytes / (0.5 + whole seconds), shown with 2 decimals:
-     * in hundredths that's bytes * 200 / (1 + 2 * seconds), rounded. */
-    comma_num_frac2((total * 200 + elapsed) / (1 + 2 * (int64_t)elapsed), rate);
-    printf("\nsent %s bytes  received %s bytes  %s bytes/sec\n",
-           comma_num(stats->sent, sent), comma_num(stats->received, recvd), rate);
-    speedup = total ? (stats->total_size * 100 + total / 2) / total : 0;
-    printf("total size is %s  speedup is %s%s\n", comma_num(stats->total_size, size),
-           comma_num_frac2(speedup, rate), p->o->dry_run ? " (DRY RUN)" : "");
+    print_summary(&p->st, p->o->stats, p->s->protocol, (long)(time(NULL) - p->s->started),
+                  p->o->dry_run);
 }
 
 static void list_files(pull_state *p)
@@ -344,9 +339,10 @@ static void list_files(pull_state *p)
 int client_pull(ars_session *s, const ars_options *o, const char *dest)
 {
     ars_flist_format fmt;
-    server_stats stats;
     pull_state p;
     char err[FLIST_MAXPATH + 64];
+    int64_t flist_start;
+    size_t i;
     int rc, io_error, show_flist;
 
     memset(&p, 0, sizeof p);
@@ -361,13 +357,13 @@ int client_pull(ars_session *s, const ars_options *o, const char *dest)
     /* Our own byte counts (used when the server sends no statistics)
      * start with the transfer, as rsync's do. */
     s->conn.bytes_in = s->conn.bytes_out = 0;
-    memset(&stats, 0, sizeof stats);
 
     /* rsync shows this only when directories are being transferred. */
     show_flist = (o->verbose || o->progress) && (o->recursive || o->list_only);
     if (show_flist)
         printf("receiving file list ... ");
     err[0] = '\0';
+    flist_start = s->conn.bytes_in;
     rc = flist_recv(&p.fl, &s->in, &fmt, err, sizeof err);
     if (rc != WIRE_OK) {
         if (show_flist)
@@ -383,6 +379,11 @@ int client_pull(ars_session *s, const ars_options *o, const char *dest)
         }
         goto out;
     }
+    /* Like rsync, what came in while the list did (whole reads, so it
+     * can include a little of what follows). */
+    p.st.flist_size = s->conn.bytes_in - flist_start;
+    for (i = 0; i < p.fl.count; i++)
+        stats_count(p.st.num_files, p.fl.files[i].mode);
     if (show_flist && o->progress)
         printf("%lu file%sto consider\n", (unsigned long)p.fl.count, p.fl.count == 1 ? " " : "s ");
     else if (show_flist)
@@ -392,10 +393,10 @@ int client_pull(ars_session *s, const ars_options *o, const char *dest)
      * doesn't run the transfer phases either), so there are no statistics
      * from it; rsync then shows its own counts. */
     if (p.fl.count == 0) {
-        if (o->verbose) {
-            stats.sent = s->conn.bytes_out;
-            stats.received = s->conn.bytes_in;
-            print_summary(&p, &stats);
+        if (o->verbose || o->stats) {
+            p.st.sent = s->conn.bytes_out;
+            p.st.received = s->conn.bytes_in;
+            show_summary(&p);
         }
         goto report;
     }
@@ -420,12 +421,12 @@ int client_pull(ars_session *s, const ars_options *o, const char *dest)
         list_files(&p);
     }
 
-    if ((rc = run_phases(&p, &stats)) != RERR_OK)
+    if ((rc = run_phases(&p)) != RERR_OK)
         goto out;
     if (dest)
         set_dir_times(&p);
-    if (o->verbose)
-        print_summary(&p, &stats);
+    if (o->verbose || o->stats)
+        show_summary(&p);
 
 report:
     if (p.interrupted || rc == RERR_SIGNAL)

@@ -22,6 +22,16 @@ trap cleanup EXIT INT TERM
 # --- daemon setup -----------------------------------------------------------
 
 mkdir -p "$WORK/pub" "$WORK/hidden"
+
+# --stats lines that depend on timing or on how the stream was split into
+# reads (like the byte counts in the -v summary).
+cat > "$WORK/stats.sed" <<'EOF'
+s/^Total bytes \(sent\|received\): [0-9,]*$/Total bytes \1: N/
+s/^File list size: [0-9,]*$/File list size: N/
+s/^File list \(generation\|transfer\) time: [0-9.,]* seconds$/File list \1 time: T/
+EOF
+STATS_SED="-f $WORK/stats.sed"
+
 cat > "$WORK/motd" <<'EOF'
 Welcome to the arsync test daemon.
 Second MOTD line.
@@ -61,6 +71,12 @@ motd file = $WORK/motd
 [upload]
     path = $WORK/upload
     read only = no
+
+[uploadv]
+    path = $WORK/upload
+    read only = no
+    comment = like upload, but --stats gets the server's deletion counts
+    max verbosity = 99
 
 [del]
     path = $WORK/del
@@ -351,7 +367,7 @@ pull() {
         # Byte counts and rates depend on timing (how the server's output
         # happens to be split into frames); destination paths differ by side.
         sed -i -e 's/^sent [0-9,]* bytes  received [0-9,]* bytes  [0-9.,]* bytes\/sec$/sent N bytes  received N bytes/' \
-               -e 's/speedup is [0-9.,]*/speedup is N/' -e "s|$WORK/$side|DEST|g" "$WORK/$side.out"
+               -e 's/speedup is [0-9.,]*/speedup is N/' -e "s|$WORK/$side|DEST|g" $STATS_SED "$WORK/$side.out"
         # rsync logs deletions and transfers from different processes, so
         # their relative order varies; with SORTED set, compare as sets.
         [ -n "${SORTED:-}" ] && sort -o "$WORK/$side.out" "$WORK/$side.out"
@@ -506,8 +522,8 @@ pushcase() {
         args=
         for a in "$@"; do
             case $a in
-            @) a="$URL/upload/$side/dest" ;;
-            @/) a="$URL/upload/$side/dest/" ;;
+            @) a="$URL/${UPMOD:-upload}/$side/dest" ;;
+            @/) a="$URL/${UPMOD:-upload}/$side/dest/" ;;
             esac
             args="$args '$a'"
         done
@@ -518,7 +534,7 @@ pushcase() {
         fi
         echo $? > "$WORK/$side.rc"
         sed -i -e 's/^sent [0-9,]* bytes  received [0-9,]* bytes  [0-9.,]* bytes\/sec$/sent N bytes  received N bytes/' \
-               -e 's/speedup is [0-9.,]*/speedup is N/' -e "s|\\b$side/dest|SIDE/dest|" "$WORK/$side.out"
+               -e 's/speedup is [0-9.,]*/speedup is N/' -e "s|\\b$side/dest|SIDE/dest|" $STATS_SED "$WORK/$side.out"
         [ -n "${SORTED:-}" ] && sort -o "$WORK/$side.out" "$WORK/$side.out"
     done
     ok=1
@@ -748,6 +764,28 @@ mkdir -p "$WORK/upload/zt"
 zs=$("$ARSYNC" -tvz "$DF/big.txt" "$URL/upload/zt/big.txt" | sed -n 's/^sent \([0-9,]*\) bytes.*/\1/p' | tr -d ,)
 check "push -z compresses (sent ${zs:-?} bytes)" \
     [ -n "$zs" ] && [ "$zs" -lt 400000 ] && cmp -s "$DF/big.txt" "$WORK/upload/zt/big.txt"
+
+# --- --stats ---------------------------------------------------------------
+
+pull "pull --stats" times "" -rt --stats "$DEL/" @
+pull "pull --stats -v" times "" -rtv --stats "$DEL/" @
+pull "pull --stats, nothing to do" times "$SEEDD" -rt --stats "$DEL/" @
+pull "pull --stats -z delta" times "$SEEDD; $CHANGE_TXT" -rtz --stats "$DEL/" @
+pull "pull --stats --delete" times "$SEEDD; $EXTRA" -rt --delete --stats "$DEL/" @
+pull "pull --stats --delete -n" times "$SEEDD; $EXTRA" -rtn --delete --stats "$DEL/" @
+pull "pull --stats single file" times "" -t --stats "$XF/random-3m" @
+pushcase "push --stats" times "" -rt --stats "$DF/" @
+pushcase "push --stats -z delta" times "$SEEDP; $PCHANGE" -rtz --stats "$DF/" @
+pushcase "push --stats -n" times "" -rtn --stats "$DF/" @
+# A daemon only reports deletions when its "max verbosity" allows --stats'
+# level: then they arrive as NDX_DEL_STATS before the goodbye (0.3.1 fix).
+pushcase "push --stats --delete" times "$SEEDP; $PEXTRA" -rt --delete --stats "$DF/" @
+UPMOD=uploadv
+pushcase "push --stats --delete, server reports deletions" times "$SEEDP; $PEXTRA" -rt --delete --stats "$DF/" @
+SORTED=1
+pushcase "push -v --stats --delete, server reports deletions" times "$SEEDP; $PEXTRA" -rtv --delete --stats "$DF/" @
+SORTED=
+UPMOD=
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

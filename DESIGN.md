@@ -437,3 +437,19 @@ M1–M3 can be tested on the Amiga early, since they need very little filesystem
   prebuilt `libz.a` has the same fault. Building `trees.c` at `-O1` (the rest at `-O2`)
   fixes it; `-O1` and `-O0` builds pass zlib's self-test. The archive is linked by path
   because the compiler driver puts `-L/opt/amiga/lib` ahead of any user `-L`.
+
+## 17. `--stats` (release 0.3.2)
+
+- **Same counters as rsync,** counted at the same places: created and transferred files
+  where rsync's receiver (pulling) or sender (pushing) counts them, i.e. as replies and
+  requests are handled, so a dry run counts what it would do. The output format is rsync's
+  `output_summary()`, including the per-type breakdown (`reg`, `dir`, `link`).
+- **Deletions:** pulling, arsync counts its own. Like rsync's generator, it also sends them
+  (`NDX_DEL_STATS`) before the end of phase 2, and the server's sender echoes them back,
+  which keeps the byte counts the same as rsync's. Pushing, the counts can only come from
+  the server: rsync's client passes `--stats` to a receiving server, but a daemon clamps it
+  to its `max verbosity` (default 1), so most daemons report 0 deleted files to rsync and
+  arsync alike.
+- **Differences:** `File list size` is the bytes read while the list arrived, as rsync
+  measures it, so both vary a little with how reads fall. With `-vv`, rsync adds heap
+  statistics, which arsync doesn't have.

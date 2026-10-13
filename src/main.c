@@ -32,6 +32,7 @@ static void usage(FILE *out)
             "  -n, --dry-run        show what would be transferred\n"
             "  -W, --whole-file     send whole files (no delta transfer)\n"
             "  -P, --progress       show progress during transfer\n"
+            "      --stats          give some file-transfer stats\n"
             "  -z, --compress       compress file data during the transfer\n"
             "      --compress-level=N    zlib level 1-9 (default 6)\n"
             "      --zc=zlib|zlibx  compression method (default: negotiated)\n"

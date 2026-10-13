@@ -166,8 +166,10 @@ static int read_tokens(pull_state *p, const ars_sum_head *sh, plat_file *f,
                     write_failed = 1;
             }
             *written += len;
+            p->st.matched += len;
             continue;
         }
+        p->st.literal += n;
         digest_update(sum, data, (size_t)n);
         if (f && !write_failed && plat_write(f, data, (size_t)n) != PLAT_OK)
             write_failed = 1;
@@ -319,7 +321,7 @@ int recv_reply(pull_state *p, int until_done, int *done)
             return stream_failure(p, "reading reply");
     }
 
-    ndx = r_ndx_skip_stats(in, &p->recv_ndx);
+    ndx = r_ndx_skip_stats(in, &p->recv_ndx, NULL);
     if (in->err)
         return stream_failure(p, "reading reply");
     if (ndx == NDX_DONE) {
@@ -347,7 +349,10 @@ int recv_reply(pull_state *p, int until_done, int *done)
     if (p->outstanding > 0)
         p->outstanding--;
 
+    /* Counted where rsync's receiver counts them. */
     if (!(iflags & ITEM_TRANSFER)) {
+        if (iflags & ITEM_IS_NEW)
+            stats_count(p->st.created, f->mode);
         /* Like rsync: report directories that changed (created, new time);
          * with -vv also say which files were already up to date. */
         if ((iflags & ITEM_SIGNIFICANT) && (WIRE_ISDIR(f->mode) || (iflags & ITEM_LOCAL_CHANGE)))
@@ -356,6 +361,10 @@ int recv_reply(pull_state *p, int until_done, int *done)
             printf("%s is uptodate\n", flist_name(&p->fl, f));
         return RERR_OK;
     }
+    if (!p->redoing && (iflags & ITEM_IS_NEW))
+        p->st.created[STAT_ALL]++;
+    p->st.xferred++;
+    p->st.transferred_size += f->size;
     if (p->o->dry_run) {
         log_name(p, (size_t)ndx);
         return RERR_OK;

@@ -14,6 +14,7 @@ typedef struct ars_options {
     int dry_run;
     int whole_file;     /* -W: no delta transfer */
     int progress;
+    int stats;          /* --stats */
     int max_name;       /* --max-name, -1 = detect */
     int amiga_rules;    /* apply AmigaDOS limits on any system (testing) */
     int list_only;      /* 1 = implied (no destination), 2 = --list-only */

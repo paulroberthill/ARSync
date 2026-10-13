@@ -197,6 +197,10 @@ int build_server_args(const ars_options *o, const ars_remote *rem, int push,
         args[n++] = "--delete-excluded";
     else if (push && o->delete_mode)
         args[n++] = "--delete";
+    /* As rsync: a receiving server then reports its deletions (if its
+     * daemon's "max verbosity" lets it). */
+    if (push && o->stats)
+        args[n++] = "--stats";
     if (o->compress && o->compress_choice == CPRES_ZLIB)
         args[n++] = "--old-compress";
     else if (o->compress && o->compress_choice == CPRES_ZLIBX)

@@ -43,6 +43,7 @@ its contents too.
 | `-n`, `--dry-run` | show what would be transferred |
 | `-v`, `--verbose` | list transferred files and a summary; `-vv` for more |
 | `-P`, `--progress` | show progress for each file |
+| `--stats` | show rsync's transfer statistics at the end (files, created, deleted, literal/matched data, bytes) |
 | `-W`, `--whole-file` | don't use delta transfer (can be quicker with a slow CPU and a fast network) |
 | `-z`, `--compress` | compress file data in transit (worth it on slow links; costs CPU) |
 | `--compress-level=N` | zlib level 1–9 (default 6) |

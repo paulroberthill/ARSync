@@ -68,6 +68,7 @@ static void test_ndx_skip_stats(void)
     ars_reader r;
     ars_writer w;
     ars_ndx_state ws, rs;
+    int32_t del[5] = { -1, -1, -1, -1, -1 };
     int i;
 
     membuf_init(&mb);
@@ -89,8 +90,11 @@ static void test_ndx_skip_stats(void)
 
     membuf_reader(&r, &mb);
     ndx_state_init(&rs);
-    CHECK_EQ(r_ndx_skip_stats(&r, &rs), 7);
-    CHECK_EQ(r_ndx_skip_stats(&r, &rs), NDX_DONE);
+    CHECK_EQ(r_ndx_skip_stats(&r, &rs, del), 7);
+    CHECK_EQ(del[0], 123456);
+    CHECK_EQ(del[4], 4);
+    CHECK_EQ(r_ndx_skip_stats(&r, &rs, NULL), NDX_DONE);
+    CHECK_EQ(del[0], 123456);   /* NULL: the later counts aren't stored */
     CHECK_EQ(r.err, WIRE_OK);
     CHECK_EQ(mb.pos, mb.len);
 
@@ -99,7 +103,7 @@ static void test_ndx_skip_stats(void)
     mb.len = 4;
     membuf_reader(&r, &mb);
     ndx_state_init(&rs);
-    r_ndx_skip_stats(&r, &rs);
+    r_ndx_skip_stats(&r, &rs, del);
     CHECK(r.err != WIRE_OK);
     membuf_free(&mb);
 }

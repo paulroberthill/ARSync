@@ -144,6 +144,8 @@ static int parse_long(ars_options *o, const char *opt, int argc, char **argv, in
         o->whole_file = 1;
     else if (strcmp(name, "progress") == 0)
         o->progress = 1;
+    else if (strcmp(name, "stats") == 0)
+        o->stats = 1;
     else if (strcmp(name, "amiga-rules") == 0)
         o->amiga_rules = 1;
     else if (strcmp(name, "archive") == 0)

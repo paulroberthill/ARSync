@@ -15,4 +15,33 @@ const char *timestring(int64_t t, char *buf);
 /* One --list-only line (without newline), as rsync prints it. */
 void format_list_entry(const ars_flist *fl, const ars_file *f, char *buf, size_t bufsize);
 
+/* Transfer statistics, as rsync keeps them for -v and --stats. The
+ * per-type counts are indexed by STAT_*: [STAT_ALL] is the total, the
+ * others are the non-regular items within it. */
+#define STAT_ALL 0
+#define STAT_DIR 1
+#define STAT_LINK 2
+#define STAT_DEV 3
+#define STAT_SPECIAL 4
+
+typedef struct ars_stats {
+    long num_files[5];
+    long created[5];
+    long deleted[5];
+    long xferred;               /* regular files transferred */
+    int64_t total_size;
+    int64_t transferred_size;   /* total size of the files transferred */
+    int64_t literal;            /* file data sent as data */
+    int64_t matched;            /* file data covered by blocks of old files */
+    int64_t flist_size;         /* bytes of the file list on the wire */
+    int64_t flist_buildtime;    /* ms; 0 = unknown (no times shown) */
+    int64_t flist_xfertime;     /* ms */
+    int64_t sent, received;
+} ars_stats;
+
+/* Counts one item of the given wire mode in counts[]. */
+void stats_count(long *counts, uint32_t mode);
+/* The --stats block (when full) and the -v summary lines. */
+void print_summary(const ars_stats *st, int full, int protocol, long elapsed, int dry_run);
+
 #endif

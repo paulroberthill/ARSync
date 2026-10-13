@@ -194,8 +194,11 @@ static int delete_item(del_ctx *c, int is_dir, int log_self)
                         c->rel, plat_strerror(rc));
         return 1;
     }
-    if (p->o->verbose && log_self)
-        printf("deleting %s%s\n", c->rel, is_dir ? "/" : "");
+    if (log_self) {
+        stats_count(p->st.deleted, is_dir ? WIRE_S_IFDIR : WIRE_S_IFREG);
+        if (p->o->verbose)
+            printf("deleting %s%s\n", c->rel, is_dir ? "/" : "");
+    }
     return 0;
 }
 

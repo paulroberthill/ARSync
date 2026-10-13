@@ -9,6 +9,7 @@
 
 #include "flist.h"
 #include "fsmap.h"
+#include "output.h"
 #include "progress.h"
 #include "plat.h"
 #include "session.h"
@@ -70,6 +71,7 @@ typedef struct pull_state {
     int interrupted;            /* Ctrl-C seen and reported */
     ars_fsrules rules;          /* what the destination can hold */
     long xfr_count;             /* files transferred, for --progress */
+    ars_stats st;               /* for -v and --stats */
     ars_progress progress;
 
     ars_token_rx tok;           /* file data as it arrives */

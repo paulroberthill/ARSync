@@ -18,7 +18,7 @@ small changes is updated by sending only the changes, in either direction.
 
 Features
   - pull and push, recursive (-r), modification times (-t), dry run (-n),
-    progress (-P), verbose output and transfer summary (-v)
+    progress (-P), verbose output and transfer summary (-v), --stats
   - delta transfer (MD5 block checksums), or whole files with -W
   - compression (-z, zlib and zlibx); packed files (.lha, .lzx, .dms,
     .zip...) are sent as they are
