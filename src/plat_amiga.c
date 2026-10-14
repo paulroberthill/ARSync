@@ -10,6 +10,7 @@
  * which lets a missing locale.library degrade to GMT rather than abort.
  */
 #include <sys/types.h>
+#include <stdio.h>
 #include <string.h>
 
 #include <exec/memory.h>
@@ -26,6 +27,7 @@
 
 #include "plat.h"
 #include "amitime.h"
+#include "tz.h"
 
 struct Library *SocketBase;
 struct Library *ArsLocaleBase;   /* NOT "LocaleBase" - see above */
@@ -49,7 +51,7 @@ struct plat_dir {
     struct FileInfoBlock *fib;
 };
 
-static long gmt_offset;     /* minutes west of GMT, from locale.library */
+static ars_tz zone;         /* ENV:TZ, else ENV:TZONE, else locale.library */
 static int got_break;
 
 /* --- startup, stack, Ctrl-C --- */
@@ -70,15 +72,42 @@ static void __attribute__((noinline)) run_on_new_stack(void)
     StackSwap(&swap);
 }
 
-static void read_gmt_offset(void)
+/* Reads an environment variable, without the trailing newline a file
+ * copied into ENV: may have. Returns 0 if it's unset or empty. */
+static int read_var(const char *name, char *buf, LONG size)
+{
+    LONG len = GetVar((CONST_STRPTR)name, (STRPTR)buf, size, 0);
+
+    while (len > 0 && (buf[len - 1] == '\n' || buf[len - 1] == '\r'
+                       || buf[len - 1] == ' ' || buf[len - 1] == '\t'))
+        buf[--len] = '\0';
+    return len > 0;
+}
+
+/* The time zone for file stamps. OS 3.x has no daylight saving, so a POSIX
+ * rule in ENV:TZ comes first; then ENV:TZONE, the fixed offset that SNTP
+ * sets; then Locale's offset (GMT if locale.library is missing). */
+static void read_time_zone(void)
 {
     struct Locale *loc;
+    char buf[128];
 
+    tz_fixed(&zone, 0);
+    if (read_var("TZ", buf, sizeof buf)) {
+        if (tz_parse(&zone, buf) == 0)
+            return;
+        fprintf(stderr, "arsync: ignoring ENV:TZ \"%s\": expected a POSIX time zone with its daylight-saving rule, e.g. GMT0BST,M3.5.0/1,M10.5.0\n", buf);
+    }
+    if (read_var("TZONE", buf, sizeof buf)) {
+        if (tz_parse_tzone(&zone, buf) == 0)
+            return;
+        fprintf(stderr, "arsync: ignoring ENV:TZONE \"%s\": not a number of hours\n", buf);
+    }
     ArsLocaleBase = OpenLibrary((CONST_STRPTR)"locale.library", 38);
     if (!ArsLocaleBase)
         return;
     if ((loc = OpenLocale(NULL)) != NULL) {
-        gmt_offset = loc->loc_GMTOffset;
+        tz_fixed(&zone, loc->loc_GMTOffset);
         CloseLocale(loc);
     }
     CloseLibrary(ArsLocaleBase);
@@ -89,7 +118,7 @@ int plat_run(int (*fn)(int argc, char **argv), int argc, char **argv)
 {
     APTR stack;
 
-    read_gmt_offset();
+    read_time_zone();
 
     run_fn = fn;
     run_argc = argc;
@@ -162,7 +191,7 @@ int plat_read_password(const char *prompt, char *buf, size_t bufsize)
 
 void plat_localtime(int64_t t, ars_tm *tm)
 {
-    secs_to_civil(t - (int64_t)gmt_offset * 60, tm);
+    secs_to_civil(t - (int64_t)tz_offset_utc(&zone, t) * 60, tm);
 }
 
 uint32_t plat_millis(void)
@@ -216,7 +245,8 @@ int plat_case_insensitive(void)
 
 int64_t plat_clamp_mtime(int64_t t)
 {
-    int64_t earliest = AMIGA_EPOCH_OFFSET + (int64_t)gmt_offset * 60;
+    int64_t earliest = AMIGA_EPOCH_OFFSET
+                       + (int64_t)tz_offset_local(&zone, AMIGA_EPOCH_OFFSET) * 60;
 
     return t < earliest ? earliest : t;
 }
@@ -430,7 +460,9 @@ static void fill_stat(const struct FileInfoBlock *fib, plat_fileinfo *st)
     d.days = fib->fib_Date.ds_Days;
     d.minute = fib->fib_Date.ds_Minute;
     d.tick = fib->fib_Date.ds_Tick;
-    st->mtime = amidate_to_unix(&d, gmt_offset, &st->mtime_nsec);
+    /* Offset 0 gives the local time as seconds since 1970. */
+    st->mtime = amidate_to_unix(&d, 0, &st->mtime_nsec);
+    st->mtime += (int64_t)tz_offset_local(&zone, st->mtime) * 60;
 }
 
 int plat_stat(const char *path, plat_fileinfo *st)
@@ -487,7 +519,7 @@ int plat_set_mtime(const char *path, int64_t mtime, long nsec)
     struct DateStamp ds;
     ars_amidate d;
 
-    unix_to_amidate(mtime, nsec, gmt_offset, &d);
+    unix_to_amidate(mtime, nsec, tz_offset_utc(&zone, mtime), &d);
     ds.ds_Days = d.days;
     ds.ds_Minute = d.minute;
     ds.ds_Tick = d.tick;

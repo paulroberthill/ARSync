@@ -34,6 +34,7 @@ extern int test_failures;
 void test_wire(void);
 void test_filter_suite(void);
 void test_amitime(void);
+void test_tz_suite(void);
 void test_plat(void);
 void test_session(void);
 void test_auth_suite(void);

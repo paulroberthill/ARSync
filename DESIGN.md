@@ -302,6 +302,9 @@ M1–M3 can be tested on the Amiga early, since they need very little filesystem
 - **`loc_GMTOffset` sign.** It's taken as minutes *west* of GMT (local = UTC − offset),
   matching AROS's interpretation. If transferred files show times off by twice the
   zone offset, flip the sign in `amitime.c`.
+- **`ENV:TZONE` sign.** Hours west, like `loc_GMTOffset`: a user on BST reported `-1`,
+  set by an SNTP client. `ENV:TZ` (a POSIX rule, `tz.c`) takes precedence over it, and
+  it over Locale, since OS 3.x has no daylight-saving rule of its own.
 - **`StackSwap()` on real Kickstart.** It works under vamos; check once on FS-UAE.
 - **bsdsocket behaviour** (non-blocking I/O, `WaitSelect()` with Ctrl-C, `Errno()`
   values). It can't be exercised under vamos, so it's first tested at M1 on FS-UAE.

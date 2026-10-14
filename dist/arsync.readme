@@ -53,6 +53,10 @@ Features
   - --delete and --delete-excluded, in both directions
   - password-protected modules (--password-file, RSYNC_PASSWORD, or prompt)
   - output, options and exit codes like rsync's, so scripts carry over
+  - summer time: with a POSIX rule in ENV:TZ (for the UK,
+    SetEnv TZ GMT0BST,M3.5.0/1,M10.5.0, then Copy ENV:TZ ENVARC:) each file's time is converted
+    with the offset for its own date; otherwise ENV:TZONE (as used by
+    SNTP), then the Locale time zone
   - files AmigaDOS can't hold (':' in names, names too long for the
     volume, names differing only in case, files of 2 GB or more) are
     skipped with a warning, never renamed
@@ -66,6 +70,15 @@ Installation: copy arsync to C: (or anywhere in your path).
 
 History
 -------
+0.4.1 (2026-10-14)
+  - Fixed: file times were an hour out for files dated in summer time,
+    since OS 3.x's Locale offset has no daylight saving. arsync now reads
+    a POSIX rule from ENV:TZ (e.g. GMT0BST,M3.5.0/1,M10.5.0) and uses the
+    offset for each file's own date; without it, ENV:TZONE (as used by
+    SNTP), then Locale.
+  - Readme: a backup and restore example, showing the trailing / needed
+    on the restore source.
+
 0.4.0 (2026-10-13)
   - New: --partial, and -P now means --partial --progress as in rsync: a
     transfer cut short (Ctrl-C, lost connection) keeps what arrived, and

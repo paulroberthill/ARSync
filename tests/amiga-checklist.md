@@ -63,6 +63,7 @@ in each side's local time zone).
 | 3 | `arsync -v -r rsync://127.0.0.1:8730/test/` | `receiving file list ... done` first, then a `sent … received …` / `total size is …` summary |
 | 4 | `arsync rsync://127.0.0.1:8730/test/nope` | Server's `link_stat … No such file or directory`, then `arsync error: … (code 23)`, `$RC` 23 |
 | 5 | Same as 1 with the Amiga clock/time zone set to something other than GMT (Prefs/Locale) | Times shift by exactly that zone's offset compared with the Linux side in UTC (`TZ=UTC rsync …`). If they're off by **twice** the offset, the `loc_GMTOffset` sign assumption (DESIGN §10) is wrong |
+| 5a | `SetEnv TZ GMT0BST,M3.5.0/1,M10.5.0`, then the same as 1 with files dated in summer and in winter | Summer files show an hour later than `TZ=UTC rsync …` on Linux, winter files the same; `UnSetEnv TZ` afterwards |
 | 6 | A large module (e.g. point the daemon at `/usr/share`) with `-r`, output redirected to `RAM:list` | Completes; note the time and free memory (`avail`) before and after |
 
 ## M4 – pulling files (whole-file transfers)

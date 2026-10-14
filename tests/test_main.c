@@ -12,6 +12,7 @@ static int run_tests(int argc, char **argv)
 
     test_wire();
     test_amitime();
+    test_tz_suite();
     test_plat();
     test_session();
     test_auth_suite();

@@ -100,7 +100,20 @@ renamed or truncated, since a renamed file would look new on every run:
   rsync's order, is kept; a skipped directory's contents are skipped too);
 - files of 2 GiB or more.
 
-Modification times are converted to local time using the Locale preferences' time zone.
+Modification times are converted to local time. AmigaOS 3.x has no daylight saving, so if
+your clock changes for summer time, give arsync the rule in `ENV:TZ` in POSIX form, and
+each file's time is converted with the offset for its own date. For the UK:
+
+```
+SetEnv TZ GMT0BST,M3.5.0/1,M10.5.0
+Copy ENV:TZ ENVARC:
+```
+
+(Central Europe: `CET-1CEST,M3.5.0,M10.5.0/3`; US Eastern: `EST5EDT,M3.2.0,M11.1.0`.)
+Without `ENV:TZ`, arsync uses `ENV:TZONE` (hours west of Greenwich, as set for SNTP; `-1`
+is UTC+1), and failing that the Locale preferences' time zone. Both are single offsets, so
+files from the other half of the year come out an hour off, and changing the offset makes
+every file's time look changed on the next run.
 Times before 1978 (the AmigaDOS epoch) are stored as 1 Jan 1978.
 
 When sending, files get permissions 0644 and directories 0755 on the server (subject to
