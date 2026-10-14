@@ -39,6 +39,17 @@ A path with a single colon (`Work:Dest`) is always local. As with rsync, a trail
 the source means "the contents of this directory"; a volume or assign name (`Work:`) means
 its contents too.
 
+So to back up a whole volume and restore it, put the `/` on the server path when restoring;
+without it the restore creates an `Apps` directory inside `Apps:`:
+
+```
+arsync -rtv --delete Apps: rsync://HOST/MODULE/Apps      back up Apps:
+arsync -rtv --delete rsync://HOST/MODULE/Apps/ Apps:     restore it (note the trailing /)
+```
+
+Add `-n` to the restore first: with `--delete` it removes anything on `Apps:` that isn't in
+the backup.
+
 | Option | Meaning |
 |---|---|
 | `-r`, `--recursive` | recurse into directories |

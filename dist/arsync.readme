@@ -29,6 +29,14 @@ small changes is updated by sending only the changes, in either direction.
   arsync -t host::module/file RAM:file
   arsync -rtv Work:Projects/ rsync://host/module/backup
 
+A trailing / on the source means "the contents of this directory", and a
+volume name (Apps:) means its contents too. So a whole volume is backed up
+and restored like this; without the / on the restore it would create an
+Apps directory inside Apps:
+
+  arsync -rtv --delete Apps: rsync://host/module/Apps
+  arsync -rtv --delete rsync://host/module/Apps/ Apps:
+
 Features
   - pull and push, recursive (-r), modification times (-t), dry run (-n),
     progress, verbose output and transfer summary (-v), --stats
