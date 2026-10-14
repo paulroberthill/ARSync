@@ -25,6 +25,10 @@ AMIGA_CFLAGS = -std=gnu99 -O2 $(AMIGA_RT) $(WARN) -Wno-pointer-sign -I$(ZLIB_DIR
 # third_party/zlib. Not the toolchain's /opt/amiga/lib/libz.a: GCC 6.5 -O2
 # miscompiles trees.c (stray byte at the end of each deflate flush; zlib's
 # own test/example.c fails under vamos), so trees.c is built at -O1 here.
+# inffast.c likewise: the peephole pass (-fpeephole2, part of -O2) merges its
+# byte-by-byte match copy into word moves, which goes wrong when a match at
+# distance 1 overlaps itself (a file then fails verification with -z;
+# tests/test_zlib.c); zlib's self-test passes despite it.
 # Also the driver puts -L/opt/amiga/lib before any user -L, so -lz would
 # always find the toolchain's copy; link the archive by path.
 ZLIB_DIR   = third_party/zlib
@@ -43,7 +47,7 @@ TEST_SRC = tests/test_main.c tests/test_wire.c tests/test_amitime.c tests/test_p
            tests/test_session.c tests/test_auth.c tests/test_flist.c \
            tests/test_pull.c tests/test_checksum.c \
            tests/test_fsmap.c tests/test_push.c tests/test_filter.c \
-           tests/test_tz.c
+           tests/test_tz.c tests/test_zlib.c
 
 HOST_DIR  = build/host
 AMIGA_DIR = build/amiga
@@ -90,7 +94,7 @@ $(AMIGA_DIR)/zlib/libz.a: $(addprefix $(AMIGA_DIR)/zlib/,$(ZLIB_SRC:.c=.o))
 $(AMIGA_DIR)/zlib/%.o: $(ZLIB_DIR)/%.c | $(AMIGA_DIR)/zlib
 	$(AMIGA_CC) $(ZLIB_CFLAGS) -MMD -MP -c -o $@ $<
 
-$(AMIGA_DIR)/zlib/trees.o: ZLIB_CFLAGS += -O1
+$(AMIGA_DIR)/zlib/trees.o $(AMIGA_DIR)/zlib/inffast.o: ZLIB_CFLAGS += -O1
 
 # Tests run inside the build directory: test_plat.c makes a scratch dir in
 # the current directory.

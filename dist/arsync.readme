@@ -70,6 +70,13 @@ Installation: copy arsync to C: (or anywhere in your path).
 
 History
 -------
+0.4.2 (2026-10-14)
+  - Fixed: with -z, a file could fail verification twice ("update
+    discarded") when updating an existing copy. GCC miscompiles zlib's
+    inflate_fast() for a repeated run that starts in earlier data, so a
+    stretch of the new file came out wrong. zlib's inffast.c is now built
+    with less optimisation, and a unit test covers the case.
+
 0.4.1 (2026-10-14)
   - Fixed: file times were an hour out for files dated in summer time,
     since OS 3.x's Locale offset has no daylight saving. arsync now reads

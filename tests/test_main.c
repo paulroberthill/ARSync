@@ -21,6 +21,7 @@ static int run_tests(int argc, char **argv)
     test_checksum_suite();
     test_fsmap_suite();
     test_push_suite();
+    test_zlib_suite();
     test_filter_suite();
 
     printf("%d checks, %d failed\n", test_checks, test_failures);
