@@ -248,7 +248,9 @@ int64_t plat_clamp_mtime(int64_t t)
     int64_t earliest = AMIGA_EPOCH_OFFSET
                        + (int64_t)tz_offset_local(&zone, AMIGA_EPOCH_OFFSET) * 60;
 
-    return t < earliest ? earliest : t;
+    /* A stamp in the hour repeated when summer time ends reads back an hour
+     * early (local time can't say which of the two it was). */
+    return t < earliest ? earliest : tz_round_trip(&zone, t);
 }
 
 /* --- sockets --- */

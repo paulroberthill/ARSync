@@ -48,4 +48,8 @@ long tz_offset_utc(const ars_tz *z, int64_t utc);
  * in the hour skipped when it starts is taken as standard time. */
 long tz_offset_local(const ars_tz *z, int64_t local);
 
+/* The UTC time a stamp of utc reads back as once stored in local time. Only
+ * differs in the hour repeated when DST ends, which reads back as DST. */
+int64_t tz_round_trip(const ars_tz *z, int64_t utc);
+
 #endif

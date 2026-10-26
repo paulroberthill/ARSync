@@ -203,3 +203,10 @@ long tz_offset_local(const ars_tz *z, int64_t local)
         return z->dst_off / 60;
     return z->std_off / 60;
 }
+
+int64_t tz_round_trip(const ars_tz *z, int64_t utc)
+{
+    int64_t local = utc - (int64_t)tz_offset_utc(z, utc) * 60;
+
+    return local + (int64_t)tz_offset_local(z, local) * 60;
+}

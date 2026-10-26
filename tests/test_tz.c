@@ -80,6 +80,13 @@ static void test_uk(void)
     CHECK_EQ(tz_offset_local(&z, UK_END + 1800), -60);
     CHECK_EQ(tz_offset_local(&z, UK_END + 3600), 0);
 
+    /* Only the second 01:xx on 25 October changes when stored as local time. */
+    CHECK_EQ(tz_round_trip(&z, UK_END - 1800), UK_END - 1800);
+    CHECK_EQ(tz_round_trip(&z, UK_END + 1800), UK_END - 1800);
+    CHECK_EQ(tz_round_trip(&z, UK_END + 3600), UK_END + 3600);
+    CHECK_EQ(tz_round_trip(&z, UK_START + 1800), UK_START + 1800);
+    CHECK_EQ(tz_round_trip(&z, 1566511506LL), 1566511506LL);   /* 2019-08-22 */
+
     /* Years past 2038 and the 68k's 64-bit arithmetic. */
     CHECK_EQ(tz_offset_utc(&z, 4102444800LL + 180 * 86400), -60);   /* 2100-06-30 */
     CHECK_EQ(tz_offset_utc(&z, 4102444800LL), 0);                   /* 2100-01-01 */

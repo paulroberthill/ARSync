@@ -56,7 +56,9 @@ int plat_name_max(const char *dir);
 /* Whether names that differ only in case are the same file. */
 int plat_case_insensitive(void);
 /* The modification time a file actually gets when t is set (AmigaDOS
- * can't go before 1978), so comparisons use what can be stored. */
+ * can't go before 1978, and keeps local time, so the hour repeated when
+ * summer time ends reads back as summer time), so comparisons use what can
+ * be stored. */
 int64_t plat_clamp_mtime(int64_t t);
 
 /* --- TCP sockets --- */
