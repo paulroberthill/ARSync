@@ -8,8 +8,9 @@ It's a clean-room implementation written for the Amiga: one process (no `fork()`
 `bsdsocket.library` and `dos.library` called directly, and Ctrl-C honoured throughout.
 
 **Written by an AI.** The code, tests and documentation were written by Claude (Anthropic's
-AI model) in Claude Code, directed and tested on the Amiga by Paul Hill. See
-`dist/arsync.readme` for the version history.
+AI model) in Claude Code, directed and tested on the Amiga by Paul Hill. Try it on
+copies of your data first, and use `-n` before `--delete`. See `dist/arsync.readme` for
+the version history.
 
 ## Requirements
 
