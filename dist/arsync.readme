@@ -70,6 +70,12 @@ Installation: copy arsync to C: (or anywhere in your path).
 
 History
 -------
+0.4.4 (2026-10-26)
+  - Fixed: with -t, copying into the root of a volume (e.g. "Apps:")
+    reported "failed to set times on Apps:: I/O error" at the end of
+    every run. AmigaDOS can't change a volume root's date, so arsync now
+    leaves it alone without complaint.
+
 0.4.3 (2026-10-26)
   - Fixed: a file or directory dated in the hour repeated when summer
     time ends (01:00-02:00 on the last Sunday of October in the UK) was

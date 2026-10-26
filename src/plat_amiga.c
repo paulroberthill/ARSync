@@ -516,16 +516,41 @@ int plat_rename(const char *from, const char *to)
     return Rename((CONST_STRPTR)from, (CONST_STRPTR)to) ? PLAT_OK : map_ioerr(IoErr());
 }
 
+/* True if path names the root directory of a volume ("Apps:"): a lock on
+ * it has no parent. */
+static int is_volume_root(const char *path)
+{
+    BPTR lock = Lock((CONST_STRPTR)path, SHARED_LOCK);
+    BPTR parent;
+
+    if (!lock)
+        return 0;
+    parent = ParentDir(lock);
+    UnLock(lock);
+    if (parent) {
+        UnLock(parent);
+        return 0;
+    }
+    return 1;
+}
+
 int plat_set_mtime(const char *path, int64_t mtime, long nsec)
 {
     struct DateStamp ds;
     ars_amidate d;
+    int rc;
 
     unix_to_amidate(mtime, nsec, tz_offset_utc(&zone, mtime), &d);
     ds.ds_Days = d.days;
     ds.ds_Minute = d.minute;
     ds.ds_Tick = d.tick;
-    return SetFileDate((CONST_STRPTR)path, &ds) ? PLAT_OK : map_ioerr(IoErr());
+    if (SetFileDate((CONST_STRPTR)path, &ds))
+        return PLAT_OK;
+    rc = map_ioerr(IoErr());
+    /* A volume's root directory has no date that SetFileDate() can change
+     * (FFS refuses), so syncing into "Apps:" would report an error for "."
+     * on every -t run. Leave the root's date alone, quietly. */
+    return is_volume_root(path) ? PLAT_OK : rc;
 }
 
 int plat_new_file_perms(const char *path, uint32_t wire_mode, const char *existing)
